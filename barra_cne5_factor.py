@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import akshare as ak
 import numpy as np
 import statsmodels.api as sm
+from scipy.stats import zscore
 
 from Utils.connect_wind import ConnectDatabase
 
@@ -31,42 +32,6 @@ class lazyproperty:
         value = self.func(instance)
         setattr(instance, self.name, value)  # Cache the computed value
         return value
-
-
-class Calculation:
-    @staticmethod
-    def _exp_weight(window, half_life):
-        exp_weight = np.asarray([0.5 ** (1 / half_life)] * window) ** np.arange(window)
-        return exp_weight[::-1] / np.sum(exp_weight)
-
-    @staticmethod
-    def _regress(y, X, intercept=True, weight=1, verbose=True):
-        if not isinstance(y, (pd.Series, pd.DataFrame)):
-            y = pd.DataFrame(y)
-        if not isinstance(X, (pd.Series, pd.DataFrame)):
-            X = pd.DataFrame(X)
-
-        if intercept:
-            cols = X.columns.tolist()
-            X['const'] = 1
-            X = X[['const'] + cols]
-
-        model = sm.WLS(y, X, weights=weight)
-        result = model.fit()
-        params = result.params
-
-        if verbose:
-            resid = y - pd.DataFrame(np.dot(X, params), index=y.index,
-                                     columns=y.columns)
-            if intercept:
-                return params.iloc[1:], params.iloc[0], resid
-            else:
-                return params, None, resid
-        else:
-            if intercept:
-                return params.iloc[1:]
-            else:
-                return params
 
 
 class GetData(ConnectDatabase):
@@ -106,29 +71,6 @@ class GetData(ConnectDatabase):
         return rf
 
     @staticmethod
-    def merged_data():
-        """
-        :param 股票代码 ‘000001.SZ’
-        :return: 日频收益数据框，格式：日期，股票代码，收益，市值
-        """
-        sql = f'''
-        SELECT p.S_INFO_WINDCODE, p.TRADE_DT, p.S_DQ_PRECLOSE, p.S_DQ_CLOSE, d.S_VAL_MV
-        FROM ASHAREEODPRICES AS p
-        LEFT JOIN ASHAREEODDERIVATIVEINDICATOR AS d
-        ON p.S_INFO_WINDCODE = d.S_INFO_WINDCODE
-        AND p.TRADE_DT = d.TRADE_DT
-        AND p.TRADE_DT BETWEEN {START_DATE} AND {END_DATE}
-        '''
-
-        connection = ConnectDatabase(sql)
-        df = connection.get_data()
-        df.sort_values(by='TRADE_DT', inplace=True)
-        df.reset_index(drop=True, inplace=True)
-        df['STOCK_RETURN'] = df['S_DQ_CLOSE'] / df['S_DQ_PRECLOSE'] - 1
-        merged_data = df[['TRADE_DT', 'S_INFO_WINDCODE', 'STOCK_RETURN', 'S_VAL_MV']]
-        return merged_data
-
-    @staticmethod
     def daily_price(windcode):
         """
         :param windcode: 股票代码 ‘000001.SZ’
@@ -163,55 +105,127 @@ class GetData(ConnectDatabase):
         df['TRADE_DT'] = pd.to_datetime(df['TRADE_DT'])
         return df
 
-# TODO: class Beta(GetData):
+    @staticmethod
+    def all_price():
+        sql = f'''
+                SELECT S_INFO_WINDCODE, TRADE_DT, S_DQ_PRECLOSE, S_DQ_CLOSE
+                FROM ASHAREEODPRICES
+                WHERE TRADE_DT BETWEEN {START_DATE} AND {END_DATE}
+                '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.sort_values(by='TRADE_DT', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        df['TRADE_DT'] = pd.to_datetime(df['TRADE_DT'])
+        return df
 
 
-# TODO: def beta(self):
+
+class Calculation:
+    @staticmethod
+    def _exp_weight(window, half_life):
+        exp_weight = np.asarray([0.5 ** (1 / half_life)] * window) ** np.arange(window)
+        return exp_weight[::-1] / np.sum(exp_weight)
+
+    @staticmethod
+    def _winsorize(x):
+        """
+        去极值，使因子值在均值的3个标准差范围内
+        """
+        mean = x.mean()
+        std = x.std()
+        winsorized = x.copy()
+        winsorized[x < mean - 3 * std] = mean - 3 * std
+        winsorized[x > mean + 3 * std] = mean + 3 * std
+        return winsorized
+
+    @staticmethod
+    def _standardize(x, market_value):
+        """
+        市值加权标准化
+        """
+        if market_value.dtype != np.float64:
+            market_value = market_value.astype(np.float64)
+
+        w_mean = np.sum(x * market_value) / np.sum(market_value)
+        std = x.std()
+        standardized = (x - w_mean) / std
+        return standardized
+
+    def _preprocess(self, data, factor_column):
+        data[f'{factor_column}_wsr'] = data.groupby('TRADE_DT')[f'{factor_column}'].transform(lambda x: self._winsorize(x))
+        data[f'{factor_column}_ppd'] = data.groupby('TRADE_DT').apply(lambda g: self._standardize(g[f'{factor_column}_wsr'], g['S_VAL_MV'])).reset_index(level=0, drop=True)
+        data.drop(columns=[f'{factor_column}_wsr'], inplace=True)
+
+        return data
+
 
 class Momentum(Calculation):
 
-    @staticmethod
-    def RSTR(df):
+
+    def RSTR(self, df, raw = False):
         """
         :param df:
         :return:
         """
-        exp_weight = Calculation._exp_weight(window = 504+21, half_life = 126)[:504]
-        stock_code = df['S_INFO_WINDCODE'].unique()
+        df['STOCK_RETURN'] = df['S_DQ_CLOSE'] / df['S_DQ_PRECLOSE'] - 1
+        df['STOCK_RETURN'] = df['STOCK_RETURN'].astype('float')
 
-        if len(df) < 504 + 21:
-            print(f'Not enough data to calculate Momentum for {stock_code}')
-            return df
-        df['EX_LG_RT'] = np.log(1 + df['STOCK_RETURN']) - np.log(1 + df['RF_RETURN'])
-        try:
-            df['RSTR'] = df['EX_LG_RT'].shift(21).rolling(window=504).apply(
-                lambda x: np.sum(x * exp_weight))
-        except Exception as e:
-            print(f'Error processing {stock_code}: {e}')
-            return df
-        df = df.dropna(subset=['RSTR'])
-        df = df.drop(columns=['EX_LG_RT']).reset_index(drop=True)
+        exp_weight = self._exp_weight(window = 504, half_life = 126)
+        grouped = df.groupby('S_INFO_WINDCODE')
+
+        for stock_code, group in grouped:
+            if len(group) < 504 + 21:
+                print(f'Not enough data to calculate Momentum for {stock_code}')
+                df.loc[group.index, 'RSTR'] = np.nan
+
+            else:
+                group['EX_LG_RT'] = np.log(1 + group['STOCK_RETURN']) - np.log(1 + group['RF_RETURN'])
+
+                try:
+                    group['RSTR'] = group['EX_LG_RT'].shift(21).rolling(window=504).apply(
+                        lambda x: np.sum(x * exp_weight))
+
+                    df.loc[group.index, 'RSTR'] = group['RSTR']
+
+                except Exception as e:
+                    print(f'Error processing {stock_code}: {e}')
+                    df.loc[group.index, 'RSTR'] = np.nan
+
+        if not raw:
+            df = self._preprocess(df, factor_column = 'RSTR')
 
         return df
 
-class Size:
+class Size(Calculation):
 
-    def __init__(self, df):
-        self.df = df
-
-    def LNCAP(self):
-        df = self.df.copy()
+    @lazyproperty
+    def LNCAP(self, df, raw = False):
         df['LNCAP'] = np.log(df['S_VAL_MV'])
+        if not raw:
+            df = self._preprocess(df, factor_column = 'LNCAP')
         return df
 
-    def NLSIZE(self):
-        df = self.LNCAP()
+    def NLSIZE(self, df, raw = False):
+        df = self.LNCAP(df)
+        df['SIZE_CUBED'] = np.power(df['LNCAP'], 3)
+        df['CONSTANT'] = 1
+        X = df[['LNCAP','CONSTANT']]
+        y = df['SIZE_CUBED']
+        model = sm.OLS(y, X).fit()
+        df['NLSIZE'] = model.resid
+        if not raw:
+            df = self._preprocess(df, factor_column = 'NLSIZE')
 
-
-
-
+        df.drop(columns=['SIZE_CUBED', 'LNCAP', 'CONSTANT'], inplace=True)
+        return df
 
 
 if __name__ == '__main__':
-    risk_free = GetData.risk_free()
-    risk_free.to_parquet('/Volumes/quanyi4g/factor/day_frequency/fundamental/RiskFree/risk_free.parquet')
+    all_market_mom = pd.read_parquet('/Users/xinyuezhang/Desktop/中量投/Project/ZLT-Project Barra/Data/all_market_data.parquet')
+    risk_free = pd.read_parquet('/Volumes/quanyi4g/factor/day_frequency/fundamental/RiskFree/risk_free.parquet')
+    all_market_mom = pd.merge(all_market_mom, risk_free, on = 'TRADE_DT', how = 'left')
+    mom = Momentum()
+    all_market_mom = mom.RSTR(all_market_mom)
+
