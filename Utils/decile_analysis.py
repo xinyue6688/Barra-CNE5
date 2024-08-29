@@ -12,6 +12,8 @@ import statsmodels.api as sm
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr, spearmanr
 
+from Utils.return_metrics import MetricsCalculator
+
 
 class lazyproperty:
     def __init__(self, func):
@@ -157,38 +159,56 @@ class DecileAnalysis:
         # 周频调仓
         elif self.rebal_freq == 'w':
             df['W'] = df['TRADE_DT'].dt.to_period('W')
+            df = df.sort_values(['W', 'TRADE_DT'], ascending=True).reset_index(drop=True)
+
+            # 标记每周的换仓日
+            df['REBALANCE_DT'] = df.groupby('W')['TRADE_DT'].transform('max') == df['TRADE_DT']
             grouped = df.groupby(['W', 'WIND_PRI_IND'])
 
             for (week, industry), group in grouped:
 
-                try:
-                    q = min(self.decile_num, len(group))
-                    labels = np.arange(1, q + 1)
-                    df.loc[group.index, 'DECILE'] = pd.qcut(group[f'{self.factor}'], q, labels=labels,
-                                                            duplicates='drop').values.tolist()
-                except ValueError as e:
-                    print(f"ValueError: {e} for date: {week}, industry: {industry}")
-                    continue
-        # 月频调仓
+                # 每一周的换仓日这天，在各个行业根据因子值分层，把分层定位回原df数据框
+                rebalance_df = group.loc[group['REBALANCE_DT'], :]
+                self._assign_decile(rebalance_df, week, industry, df)
+
+            # 原数据框根据标的分组
+            grouped_by_stock = df.groupby('S_INFO_WINDCODE')
+
+            for _, group in grouped_by_stock:
+
+                # 每组按日期升序排列，分层信息前向填充
+                df.loc[group.index, 'DECILE'] = group['DECILE'].ffill()
+
+            # 删除带有分层缺失值的行，因缺少上周末因子值导致的分层值缺失
+            df = df.dropna(subset=['DECILE'])
+
         elif self.rebal_freq == 'm':
             df['M'] = df['TRADE_DT'].dt.to_period('M')
+            df = df.sort_values(['M', 'TRADE_DT'], ascending=True).reset_index(drop=True)
+
+            # 标记每月的换仓日
+            df['REBALANCE_DT'] = df.groupby('M')['TRADE_DT'].transform('max') == df['TRADE_DT']
             grouped = df.groupby(['M', 'WIND_PRI_IND'])
 
             for (month, industry), group in grouped:
+                # 每月的换仓日这天，在各个行业根据因子值分层，把分层定位回原df数据框
+                rebalance_df = group.loc[group['REBALANCE_DT'], :]
+                self._assign_decile(rebalance_df, month, industry, df)
 
-                try:
-                    q = min(self.decile_num, len(group))
-                    labels = np.arange(1, q + 1)
-                    df.loc[group.index, 'DECILE'] = pd.qcut(group[f'{self.factor}'], q, labels=labels,
-                                                            duplicates='drop').values.tolist()
-                except ValueError as e:
-                    print(f"ValueError: {e} for month: {month}, industry: {industry}")
-                    continue
+            # 原数据框根据标的分组
+            grouped_by_stock = df.groupby('S_INFO_WINDCODE')
+
+            for _, group in grouped_by_stock:
+                # 每组按日期升序排列，分层信息前向填充
+                df.loc[group.index, 'DECILE'] = group['DECILE'].ffill()
+
+            # 删除带有分层缺失值的行，因缺少上周末因子值导致的分层值缺失
+            df = df.dropna(subset=['DECILE'])
 
         df['DECILE'] = df['DECILE'].astype(int)
         return df
 
-# TODO: 增加月频调仓
+
     def calculate_decile_returns(self, mv_neutral = True):
         """
         计算每个交易日期和分位数的平均日回报率
@@ -259,7 +279,7 @@ class DecileAnalysis:
         return long_short_df
 
 
-    def calculate_ic_metrics(self):
+    def print_ic_metrics(self):
         """
         计算IC、RankIC、ICIR、RankICIR、t-test
 
@@ -276,27 +296,20 @@ class DecileAnalysis:
         ic_values = []
         rank_ic_values = []
 
-        if self.rebal_freq == 'd':
-            rebal_col = 'TRADE_DT'
-        elif self.rebal_freq == 'w':
-            rebal_col = 'W'
-        elif self.rebal_freq == 'm':
-            rebal_col = 'M'
-
-        for date, group in factor_decile_rt_df.groupby(f'{rebal_col}'):
+        for date, group in factor_decile_rt_df.groupby('TRADE_DT'):
             group = group.dropna(subset=['DECILE', 'STOCK_RETURN_NXTD'])
-            decile = pd.to_numeric(group['DECILE'], errors='coerce')
+            factor_val = pd.to_numeric(group[f'{self.factor}'], errors='coerce')
             future_return = pd.to_numeric(group['STOCK_RETURN_NXTD'], errors='coerce')
 
-            if len(decile) < 2 or decile.isnull().any() or future_return.isnull().any():
+            if len(factor_val) < 2 or factor_val.isnull().any() or future_return.isnull().any():
                 ic_values.append(np.nan)
                 rank_ic_values.append(np.nan)
                 continue
 
-            ic, _ = pearsonr(decile, future_return)
+            ic, _ = pearsonr(factor_val, future_return)
             ic_values.append(ic)
 
-            rank_ic, _ = spearmanr(decile, future_return)
+            rank_ic, _ = spearmanr(factor_val, future_return)
             rank_ic_values.append(rank_ic)
 
         ic_series = pd.Series(ic_values)
@@ -305,25 +318,81 @@ class DecileAnalysis:
         icir = ic_series.mean() / ic_series.std()
         rank_icir = rank_ic_series.mean() / rank_ic_series.std()
 
-        lambda_hat = long_short_df['long_short_rt_adj'].mean()
-        se_lambda = np.std(long_short_df['long_short_rt_adj']) / np.sqrt(len(long_short_df))
-        t_stat = lambda_hat / se_lambda if se_lambda != 0 else np.nan
-
         results = pd.DataFrame({
             'IC': [ic_series.mean()],
             'RankIC': [rank_ic_series.mean()],
             'ICIR': [icir],
             'RankICIR': [rank_icir],
-            't-stat': [t_stat]
         })
 
-        return results
+        print(f'IC_IR metrics of factor {self.factor}:')
+        print(results)
 
+        print(f'Long-short portfolio return features of factor {self.factor}:')
+        self.print_metrics()
+
+    def _calculate_return_features(self):
+        daily_return = self.long_short_df['long_short_rt_adj']
+        date = self.long_short_df['TRADE_DT'].unique()
+        self.df = pd.DataFrame({
+            'daily_return': daily_return,
+            'date': date
+        })
+        # NAV
+        self.nav = self.df['daily_return'].transform(lambda x: (1 + x).cumprod())
+        # Total return
+        self.total_return = (self.nav.iloc[-1] / self.nav.iloc[0]) - 1
+
+        # Annualized return
+        self.annualized_return = ((1 + self.total_return) ** (252 / len(self.df))) - 1
+
+        # Daily volatility
+        self.daily_volatility = self.df['daily_return'].std()
+
+        # Annualized volatility
+        self.annualized_volatility = self.daily_volatility * np.sqrt(252)
+
+        # Sharpe ratio
+        self.sharpe_ratio = self.annualized_return / self.annualized_volatility
+
+        # t-stat
+        lambda_hat = self.long_short_df['long_short_rt_adj'].mean()
+        se_lambda = np.std(self.long_short_df['long_short_rt_adj']) / np.sqrt(len(self.long_short_df))
+        self.t_stat = lambda_hat / se_lambda if se_lambda != 0 else np.nan
+
+        # Max drawdown
+        cumulative_returns = (1 + self.df['daily_return']).cumprod()
+        peak = cumulative_returns.expanding(min_periods=1).max()
+        drawdown = (cumulative_returns / peak) - 1
+        self.max_drawdown = drawdown.min()
+
+        # Daily win rate
+        self.df['daily_win_rate'] = np.where(self.df['daily_return'] > 0, 1, 0)
+        self.daily_win_rate = self.df['daily_win_rate'].mean()
+
+        # Max drawdown start and end dates
+        max_dd_id = np.argmax(np.maximum.accumulate(self.df['daily_return']) - self.df['daily_return'])
+        drawdown_end_id = np.argmax(self.df['daily_return'][:max_dd_id])
+        self.drawdown_end_date = self.df['date'].iloc[drawdown_end_id]
+        drawdown_start_id = np.argmax(self.df['daily_return'][:drawdown_end_id])
+        self.drawdown_start_date = self.df['date'].iloc[drawdown_start_id]
+
+    def print_metrics(self):
+        self._calculate_return_features()
+        print(f"Total Return: {self.total_return:.2%}")
+        print(f"Annualized Return: {self.annualized_return:.2%}")
+        print(f"Annualized Volatility: {self.annualized_volatility:.2%}")
+        print(f"Sharpe Ratio: {self.sharpe_ratio:.2f}")
+        print(f"Long short t-stat: {self.t_stat:.2f}")
+        print(f"Max Drawdown: {self.max_drawdown:.2%}")
+        print(f"Daily Win Rate: {self.daily_win_rate:.2%}")
+        print(f"Max Drawdown Start Date: {self.drawdown_start_date}")
+        print(f"Max Drawdown End Date: {self.drawdown_end_date}")
 
 if __name__ == '__main__':
     all_mkt_mom = pd.read_parquet('/Users/xinyuezhang/Desktop/中量投/Project/ZLT-Project Barra/Data/all_market_momentum.parquet')
 
-    analysis = DecileAnalysis(all_mkt_mom, 5, 'RSTR', 'w')
+    analysis = DecileAnalysis(all_mkt_mom, 5, 'RSTR', 'd')
     mom_decile_rt_df = analysis.calculate_decile_returns()
     long_short_df = analysis.long_short_NAV(mom_decile_rt_df)
     results = analysis.calculate_ic_metrics()

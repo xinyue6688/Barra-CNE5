@@ -17,6 +17,7 @@ from barra_cne5_factor import GetData, Calculation
 from Utils.data_clean import DataProcess
 from Utils.decile_analysis import DecileAnalysis
 from Utils.connect_wind import ConnectDatabase
+from Utils.get_wind_data import WindData
 
 risk_free = GetData.risk_free()
 trade_pool = pd.read_parquet('/Volumes/quanyi4g/data/index/pool/tradable_components.parquet')
@@ -83,16 +84,34 @@ all_mkt_mom = data_processer.assign_industry(all_mkt_mom)
 all_mkt_mom.to_parquet('Data/all_market_momentum.parquet')
 
 
-analysis = DecileAnalysis(decile_num=5, factor='RSTR', df=all_mkt_mom)
-mom_decile_rt_df = analysis.calculate_average_daily_returns()
+trade_pool = pd.read_parquet('/Volumes/quanyi4g/data/index/pool/tradable_components.parquet')
+pool_mom = pd.merge(trade_pool, all_mkt_mom, on = ['TRADE_DT', 'S_INFO_WINDCODE'])
 
-########检查问题###########
-mom_decile_nav_pivot = mom_decile_rt_df.pivot(index='TRADE_DT', columns='DECILE', values=['NAV'])
-group_by_date = all_mkt_mom.groupby(['TRADE_DT'])
-date_lengths = []
-for date, group in group_by_date:
-    date_lengths.append({'TRADE_DT': date, 'Group_Length': len(group)})
-date_lengths_df = pd.DataFrame(date_lengths)
-#########################
+analysis = DecileAnalysis(pool_mom, 5, 'RSTR', 'm')
+mom_decile_rt_df = analysis.calculate_decile_returns()
+long_short_df = analysis.long_short_NAV(mom_decile_rt_df)
 
-mom_metrics = calculate_ic_metrics(all_mkt_mom_decile, mom_decile_rt_df)
+wind_data = WindData(START_DATE, END_DATE)
+benchmark = wind_data.get_industry_index('8841388.WI')
+benchmark['TRADE_DT'] = pd.to_datetime(benchmark['TRADE_DT'])
+benchmark['S_DQ_PCTCHANGE'] = benchmark['S_DQ_PCTCHANGE'].astype(float)
+benchmark['S_DQ_PCTCHANGE'] = benchmark['S_DQ_PCTCHANGE'] * 0.01
+benchmark['NAV'] = (1 + benchmark['S_DQ_PCTCHANGE']).cumprod()
+
+if isinstance(long_short_df.columns, pd.MultiIndex):
+    long_short_df.columns = ['_'.join(map(str, col)).strip() if type(col) is tuple else col for col in long_short_df.columns]
+long_short_df.rename(columns={'TRADE_DT_': 'TRADE_DT',
+                              'NAV_adj_': 'NAV_adj',
+                              'long_short_rt_adj_': 'long_short_rt'}, inplace=True)
+
+aligned_df = pd.merge(long_short_df[['TRADE_DT', 'NAV_adj']], benchmark[['TRADE_DT', 'NAV']], on='TRADE_DT', how='inner')
+plt.figure(figsize=(12, 8))
+plt.title('NAV')
+plt.xlabel('Date')
+plt.ylabel('Cumulative NAV')
+plt.plot(aligned_df['TRADE_DT'], aligned_df['NAV_adj'], label='Long-Short Portfolio Adjusted (Exposure 1)')
+plt.plot(aligned_df['TRADE_DT'], aligned_df['NAV'], label='EW A Index')
+plt.legend()
+plt.show()
+results = analysis.calculate_ic_metrics()
+print(results)

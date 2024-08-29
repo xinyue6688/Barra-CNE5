@@ -120,6 +120,22 @@ class GetData(ConnectDatabase):
         df['TRADE_DT'] = pd.to_datetime(df['TRADE_DT'])
         return df
 
+    @staticmethod
+    def industry_index(index_code: str):
+        fields_sql = 'S_INFO_WINDCODE , TRADE_DT, S_DQ_PCTCHANGE'
+        table = 'AINDEXWINDINDUSTRIESEOD'
+
+        sql = f'''SELECT {fields_sql}               
+                     FROM {table}
+                     WHERE (TRADE_DT BETWEEN '{START_DATE}' AND '{END_DATE}')
+                     AND (S_INFO_WINDCODE = '{index_code}')
+                  '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.sort_values(by='TRADE_DT', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
 
 
 class Calculation:
