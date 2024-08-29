@@ -35,7 +35,6 @@ class DecileAnalysis:
         self.decile_num = decile_num
         self.rebal_freq = rebal_freq
         self.df_with_decile = None
-        self.decile_rt_factorval = None
         self.long_short_df = None
 
     def _clean_data(self, df):
@@ -223,7 +222,6 @@ class DecileAnalysis:
         df_with_decile = df_with_decile.dropna(subset=['STOCK_RETURN_NXTD'])
         self.df_with_decile = df_with_decile
 
-
         mean_returns = df_with_decile.groupby(['TRADE_DT', 'DECILE'])['STOCK_RETURN_NXTD'].mean().reset_index()
         trade_dates = df_with_decile['TRADE_DT'].unique()
 
@@ -233,6 +231,9 @@ class DecileAnalysis:
         factor_decile_rt_df = factor_decile_rt_df.sort_values(['TRADE_DT', 'DECILE'], ascending=[True, True])
         factor_decile_rt_df['NAV'] = factor_decile_rt_df.groupby('DECILE')['STOCK_RETURN_NXTD'].transform(
             lambda x: (1 + x).cumprod())
+
+        factor_decile_rt_df = pd.merge(factor_decile_rt_df, df_with_decile.groupby(['TRADE_DT', 'DECILE'])[f'{self.factor}'].mean().reset_index(),
+                                       how='left', on=['TRADE_DT', 'DECILE'])
 
         self.factor_decile_rt_df = factor_decile_rt_df
 
@@ -251,7 +252,7 @@ class DecileAnalysis:
         plt.tight_layout()
         plt.show()
 
-    def long_short_NAV(self, factor_decile_rt_df):
+    def long_short_NAV(self):
         """
         多空净值和基准净值对比
 
@@ -261,11 +262,7 @@ class DecileAnalysis:
                                                    'long_short_rt_adj'（根据因子暴露为1调整后的多空回报率）,
                                                    'NAV_adj'（调整后净值）
         """
-        df = self.df_with_decile
-
-        decile_factor = df.groupby(['TRADE_DT', 'DECILE'])[f'{self.factor}'].mean().reset_index()
-        factor_decile_rt_df = pd.merge(factor_decile_rt_df, decile_factor, how='left', on=['TRADE_DT', 'DECILE'])
-        self.decile_rt_factorval = factor_decile_rt_df
+        factor_decile_rt_df = self.factor_decile_rt_df
 
         long_short_df = factor_decile_rt_df.pivot(index='TRADE_DT', columns='DECILE',
                                                   values=['STOCK_RETURN_NXTD', f'{self.factor}'])
@@ -281,7 +278,7 @@ class DecileAnalysis:
         return long_short_df
 
 
-    def print_ic_metrics(self):
+    def _print_ic_metrics(self, df_type = 'decile'):
         """
         计算IC、RankIC、ICIR、RankICIR、t-test
 
@@ -292,13 +289,17 @@ class DecileAnalysis:
         :return: 各项指标结果
         """
 
-        factor_decile_rt_df = self.decile_rt_factorval
-
         ic_values = []
         rank_ic_values = []
+        if df_type == 'decile':
+            rt_factor_val_df = self.factor_decile_rt_df
+        elif df_type == 'stock':
+            rt_factor_val_df = self.df_with_decile
+        else:
+            print("Value df_type must be 'decile' or 'stock'")
 
-        for date, group in factor_decile_rt_df.groupby('TRADE_DT'):
-            group = group.dropna(subset=['DECILE', 'STOCK_RETURN_NXTD'])
+        for date, group in rt_factor_val_df.groupby('TRADE_DT'):
+            #group = group.dropna(subset=['DECILE', 'STOCK_RETURN_NXTD'])
             factor_val = pd.to_numeric(group[f'{self.factor}'], errors='coerce')
             future_return = pd.to_numeric(group['STOCK_RETURN_NXTD'], errors='coerce')
 
@@ -332,11 +333,18 @@ class DecileAnalysis:
             'RankICIR': [rank_icir],
         })
 
-        print(f'IC_IR metrics of factor {self.factor}:')
         print(results)
 
+    def print_long_short_metrics(self):
         print(f'Long-short portfolio return features of factor {self.factor}:')
-        self.print_metrics()
+        self._print_metrics()
+
+        print(f'Decile factor value and returns IC_IR metrics of factor {self.factor}:')
+        self._print_ic_metrics(df_type='decile')
+
+    def print_icir_bystock(self):
+        print(f'Stock factor value and returns IC_IR metrics of factor {self.factor}:')
+        self._print_ic_metrics(df_type='stock')
 
     def _calculate_return_features(self):
         daily_return = self.long_short_df['long_short_rt_adj']
@@ -384,7 +392,7 @@ class DecileAnalysis:
         drawdown_start_id = np.argmax(self.df['daily_return'][:drawdown_end_id])
         self.drawdown_start_date = self.df['date'].iloc[drawdown_start_id]
 
-    def print_metrics(self):
+    def _print_metrics(self):
         self._calculate_return_features()
         print(f"Total Return: {self.total_return:.2%}")
         print(f"Annualized Return: {self.annualized_return:.2%}")

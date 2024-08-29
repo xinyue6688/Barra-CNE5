@@ -20,8 +20,10 @@ pool_mom = pd.merge(trade_pool, all_mkt_mom, on = ['TRADE_DT', 'S_INFO_WINDCODE'
 analysis = DecileAnalysis(pool_mom, 5, 'RSTR', 'w')
 analysis.plot_decile_returns()
 mom_decile_rt_df = analysis.factor_decile_rt_df
-long_short_df = analysis.long_short_NAV(mom_decile_rt_df)
-analysis.print_ic_metrics()
+long_short_df = analysis.long_short_NAV()
+long_short_df.to_excel('Data/long_short_df.xlsx')
+analysis.print_long_short_metrics()
+analysis.print_icir_bystock()
 
 
 benchmark = GetData.industry_index('8841388.WI')
