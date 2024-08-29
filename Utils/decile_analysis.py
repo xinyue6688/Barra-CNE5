@@ -234,6 +234,10 @@ class DecileAnalysis:
         factor_decile_rt_df['NAV'] = factor_decile_rt_df.groupby('DECILE')['STOCK_RETURN_NXTD'].transform(
             lambda x: (1 + x).cumprod())
 
+        self.factor_decile_rt_df = factor_decile_rt_df
+
+    def plot_decile_returns(self):
+        self.calculate_decile_returns()
         deciles = range(1, self.decile_num + 1)
         plt.ioff()
         plt.figure(figsize=(12, 8))
@@ -241,13 +245,11 @@ class DecileAnalysis:
         plt.xlabel('Date')
         plt.ylabel('NAV')
         for decile in deciles:
-            decile_data = factor_decile_rt_df[factor_decile_rt_df['DECILE'] == decile]
+            decile_data = self.factor_decile_rt_df[self.factor_decile_rt_df['DECILE'] == decile]
             plt.plot(decile_data['TRADE_DT'], decile_data['NAV'], label=f'Decile {decile}')
         plt.legend(loc='upper left')
         plt.tight_layout()
         plt.show()
-
-        return factor_decile_rt_df
 
     def long_short_NAV(self, factor_decile_rt_df):
         """
@@ -291,7 +293,6 @@ class DecileAnalysis:
         """
 
         factor_decile_rt_df = self.decile_rt_factorval
-        long_short_df = self.long_short_df
 
         ic_values = []
         rank_ic_values = []
@@ -315,12 +316,18 @@ class DecileAnalysis:
         ic_series = pd.Series(ic_values)
         rank_ic_series = pd.Series(rank_ic_values)
 
+        ic = ic_series.mean()
+        ic_t_stat = ic/(ic_series.std()/np.sqrt(len(ic_series)))
+        rank_ic = rank_ic_series.mean()
+        rank_ic_t_stat = rank_ic / (rank_ic_series.std() / np.sqrt(len(rank_ic_series)))
         icir = ic_series.mean() / ic_series.std()
         rank_icir = rank_ic_series.mean() / rank_ic_series.std()
 
         results = pd.DataFrame({
-            'IC': [ic_series.mean()],
-            'RankIC': [rank_ic_series.mean()],
+            'IC': [ic],
+            'IC t-stat': [ic_t_stat],
+            'RankIC': [rank_ic],
+            'RankIC t-stat': [rank_ic_t_stat],
             'ICIR': [icir],
             'RankICIR': [rank_icir],
         })

@@ -9,11 +9,8 @@ import numpy as np
 from datetime import datetime
 import matplotlib.pyplot as plt
 
-from barra_cne5_factor import GetData, Calculation
-from Utils.data_clean import DataProcess
+from barra_cne5_factor import GetData
 from Utils.decile_analysis import DecileAnalysis
-from Utils.get_wind_data import WindData
-from Utils.connect_wind import ConnectDatabase
 
 trade_pool = pd.read_parquet('/Volumes/quanyi4g/data/index/pool/tradable_components.parquet')
 all_mkt_mom = pd.read_parquet('Data/all_market_momentum.parquet')
@@ -21,7 +18,8 @@ all_mkt_mom = pd.read_parquet('Data/all_market_momentum.parquet')
 pool_mom = pd.merge(trade_pool, all_mkt_mom, on = ['TRADE_DT', 'S_INFO_WINDCODE'])
 
 analysis = DecileAnalysis(pool_mom, 5, 'RSTR', 'w')
-mom_decile_rt_df = analysis.calculate_decile_returns()
+analysis.plot_decile_returns()
+mom_decile_rt_df = analysis.factor_decile_rt_df
 long_short_df = analysis.long_short_NAV(mom_decile_rt_df)
 analysis.print_ic_metrics()
 
