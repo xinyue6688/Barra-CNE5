@@ -171,8 +171,9 @@ class Calculation:
 
     def _preprocess(self, data, factor_column):
         data[f'{factor_column}_wsr'] = data.groupby('TRADE_DT')[f'{factor_column}'].transform(lambda x: self._winsorize(x))
-        data[f'{factor_column}_ppd'] = data.groupby('TRADE_DT').apply(lambda g: self._standardize(g[f'{factor_column}_wsr'], g['S_VAL_MV'])).reset_index(level=0, drop=True)
-        data.drop(columns=[f'{factor_column}_wsr'], inplace=True)
+        data[f'{factor_column}_pp'] = data.groupby('TRADE_DT').apply(lambda g: self._standardize(g[f'{factor_column}_wsr'], g['S_VAL_MV'])).reset_index(level=0, drop=True)
+        data[f'{factor_column}'] = data[f'{factor_column}_pp']
+        data.drop(columns=[f'{factor_column}_wsr', f'{factor_column}_pp'], inplace=True)
 
         return data
 
@@ -216,8 +217,9 @@ class Momentum(Calculation):
 
 class Size(Calculation):
 
-    @lazyproperty
     def LNCAP(self, df, raw = False):
+        if df['S_VAL_MV'].dtype != np.float64:
+            df['S_VAL_MV'] = df['S_VAL_MV'].astype(np.float64)
         df['LNCAP'] = np.log(df['S_VAL_MV'])
         if not raw:
             df = self._preprocess(df, factor_column = 'LNCAP')

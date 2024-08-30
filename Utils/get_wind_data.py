@@ -87,7 +87,7 @@ class WindData(ConnectDatabase):
         return df
 
     def get_industry_index(self, index_code: str):
-        fields = ['S_INFO_WINDCODE', 'TRADE_DT', 'S_DQ_PRECLOSE', 'S_DQ_CLOSE', 'S_DQ_PCTCHANGE']
+        fields = ['S_INFO_WINDCODE', 'TRADE_DT', 'S_DQ_PCTCHANGE']
         table = 'AINDEXWINDINDUSTRIESEOD'
 
         fields_sql = ', '.join(fields)

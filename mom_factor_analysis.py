@@ -39,12 +39,21 @@ long_short_df.rename(columns={'TRADE_DT_': 'TRADE_DT',
                               'long_short_rt_adj_': 'long_short_rt'}, inplace=True)
 
 aligned_df = pd.merge(long_short_df[['TRADE_DT', 'NAV_adj']], benchmark[['TRADE_DT', 'NAV']], on='TRADE_DT', how='inner')
-plt.figure(figsize=(12, 8))
-plt.title('NAV')
-plt.xlabel('Date')
-plt.ylabel('Cumulative NAV')
-plt.plot(aligned_df['TRADE_DT'], aligned_df['NAV_adj'], label='Long-Short Portfolio Adjusted (Exposure 1)')
-plt.plot(aligned_df['TRADE_DT'], aligned_df['NAV'], label='EW A Index')
-plt.legend()
-plt.show()
 
+fig, ax1 = plt.subplots(figsize=(10, 6))
+
+ax1.plot(aligned_df['TRADE_DT'], aligned_df['NAV_adj'], color = 'blue', label='Long-Short Portfolio Adjusted (Exposure 1)')
+ax1.set_xlabel('Time')
+ax1.set_ylabel('Long-Short Portfolio', color='black')
+ax1.tick_params(axis='y', labelcolor='black')
+
+ax2 = ax1.twinx()
+ax2.plot(aligned_df['TRADE_DT'], aligned_df['NAV'], color = 'red', label='EW A Index')
+ax2.set_ylabel('EW A Index', color='black')
+ax2.tick_params(axis='y', labelcolor='black')
+
+ax1.set_title('NAV')
+ax1.legend(loc='upper left')
+ax2.legend(loc='upper right')
+
+plt.show()

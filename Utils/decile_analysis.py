@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import pearsonr, spearmanr
 
 from Utils.return_metrics import MetricsCalculator
-
+from barra_cne5_factor import GetData
 
 class lazyproperty:
     def __init__(self, func):
@@ -29,20 +29,22 @@ class lazyproperty:
 
 class DecileAnalysis:
 
-    def __init__(self, df, decile_num, factor, rebal_freq):
+    def __init__(self, df, decile_num, factor, rebal_freq, mv_neutral= True, trade_pool = False):
         self.factor = factor
-        self.cleaned_df = self._clean_data(df)
+        self.clean_df = self._clean_data(df)
         self.decile_num = decile_num
         self.rebal_freq = rebal_freq
-        self.df_with_decile = None
-        self.long_short_df = None
+        self.mv_neutral = mv_neutral
+        self.df_with_decile = self.industry_neutral_decile(trade_pool)
+        self.factor_decile_rt_df = self.calculate_decile_returns()
+        self.long_short_df = self.long_short_NAV()
 
     def _clean_data(self, df):
         """
         处理输入的数据框：
-        - 去除市值（S_VAL_MV）空值的行（如果用户同意）
+        - 在数据框中添加收益列（如没有）
+        - 去除市值（S_VAL_MV）空值的行
         - 将市值列转换为float类型（如果不是float）
-        - 对因子值（factor）进行截面标准化和缩尾处理
 
         :param df: 数据框，包含以下列及格式：
                                TRADE_DT                datetime64[ns]
@@ -50,10 +52,15 @@ class DecileAnalysis:
                                S_VAL_MV                       float64
                                STOCK_RETURN                   float64
                                RF_RETURN                      float64
-                               RSTR                           float64
+                               {factor}                       float64
                                WIND_PRI_IND                    object
         :return: 处理好的数据框
         """
+
+        # 确保数据框中有正确的收益列
+        if 'STOCK_RETURN' not in df.columns:
+            df['STOCK_RETURN'] = df['S_DQ_CLOSE'] / df['S_DQ_PRECLOSE'] - 1
+
         count_mv_nan = df['S_VAL_MV'].isna().sum()
         print(f"Number of NaN values in 'S_VAL_MV': {count_mv_nan}")
 
@@ -70,13 +77,6 @@ class DecileAnalysis:
             print(f"Converting 'S_VAL_MV' from {df['S_VAL_MV'].dtype} to float64.")
             df['S_VAL_MV'] = df['S_VAL_MV'].astype('float64')
 
-        # 获取截面缩尾因子值
-        df[f'{self.factor}_winsorized'] = df.groupby('TRADE_DT')[f'{self.factor}'].transform(
-            lambda x: winsorize(x, limits=[0.05, 0.05]))
-
-        # 获取截面标准化因子值
-        df[f'{self.factor}_norm'] = df.groupby('TRADE_DT')[f'{self.factor}_winsorized'].transform(lambda x: zscore(x))
-
         return df
 
     def mv_neutralization(self):
@@ -84,7 +84,7 @@ class DecileAnalysis:
         市值中性化处理
         :return: 市值中性化处理后的数据表 (pd.DataFrame)
         """
-        df = self.cleaned_df.copy()
+        df = self.clean_df
         df = df.reset_index(drop=True)
         df['const'] = 1.0
         df['lnMV'] = np.log(df['S_VAL_MV'])
@@ -123,12 +123,19 @@ class DecileAnalysis:
         try:
             q = min(self.decile_num, len(group))
             labels = np.arange(1, q + 1)
-            df.loc[group.index, 'DECILE'] = pd.qcut(group[self.factor], q, labels=labels,
+            df.loc[group.index, 'DECILE'] = pd.qcut(group[f'{self.factor}_LAG1'], q, labels=labels,
                                                     duplicates='drop').values.tolist()
-        except ValueError as e:
-            print(f"ValueError: {e} for date/period: {date_or_period}, industry: {industry}")
 
-    def industry_neutral_decile(self, mv_neutral = True):
+        except ValueError as e:
+            print(
+                f"ValueError: {e} for date/period: {date_or_period}, industry: {industry}. Adjusting labels and retrying...")
+
+            # 当捕获到ValueError时，获取实际的区间，并+1变为分组数直接赋值回原数据框
+            bins = pd.qcut(group[f'{self.factor}_LAG1'], q, labels=False, duplicates='drop').values.tolist()
+            deciles = [x + 1 for x in bins]
+            df.loc[group.index, 'DECILE'] = deciles
+
+    def industry_neutral_decile(self, trade_pool):
         """
         对数据进行行业中性化及分组
 
@@ -136,13 +143,20 @@ class DecileAnalysis:
         """
 
         # 选择是否市值中性
-        if mv_neutral:
+        if self.mv_neutral:
             df = self.mv_neutralization()
         else:
-            df = self.cleaned_df.copy()
+            df = self.clean_df
 
+        df = df.sort_values(by = ['S_INFO_WINDCODE', 'TRADE_DT'])
+        df[f'{self.factor}_LAG1'] = df.groupby('S_INFO_WINDCODE')[f'{self.factor}'].shift(1)
+        df = df.dropna(subset = [f'{self.factor}_LAG1'])
         df.reset_index(inplace=True, drop=True)
         df['DECILE'] = np.nan
+
+        if trade_pool:
+            trade_pool = pd.read_parquet('/Volumes/quanyi4g/data/index/pool/tradable_components.parquet')
+            df = pd.merge(trade_pool, df, how='left', on = ['TRADE_DT', 'S_INFO_WINDCODE'])
 
         # 日频调仓
         if self.rebal_freq == 'd':
@@ -157,8 +171,8 @@ class DecileAnalysis:
 
         # 周频调仓
         elif self.rebal_freq == 'w':
+            # 按日期升序排列
             df['W'] = df['TRADE_DT'].dt.to_period('W')
-            df = df.sort_values(['W', 'TRADE_DT'], ascending=True).reset_index(drop=True)
 
             # 标记每周的换仓日
             df['REBALANCE_DT'] = df.groupby('W')['TRADE_DT'].transform('max') == df['TRADE_DT']
@@ -175,10 +189,10 @@ class DecileAnalysis:
 
             for _, group in grouped_by_stock:
 
-                # 每组按日期升序排列，分层信息前向填充
+                # 分层信息前向填充
                 df.loc[group.index, 'DECILE'] = group['DECILE'].ffill()
 
-            # 删除带有分层缺失值的行，因缺少上周末因子值导致的分层值缺失
+            # 删除带有分层缺失值的行，因缺少换仓日前一天收盘时的因子值导致的分层值缺失
             df = df.dropna(subset=['DECILE'])
 
         elif self.rebal_freq == 'm':
@@ -198,17 +212,17 @@ class DecileAnalysis:
             grouped_by_stock = df.groupby('S_INFO_WINDCODE')
 
             for _, group in grouped_by_stock:
-                # 每组按日期升序排列，分层信息前向填充
+                # 分层信息前向填充
                 df.loc[group.index, 'DECILE'] = group['DECILE'].ffill()
 
-            # 删除带有分层缺失值的行，因缺少上周末因子值导致的分层值缺失
+            # 删除带有分层缺失值的行，因缺少因子值导致的分层值缺失
             df = df.dropna(subset=['DECILE'])
 
         df['DECILE'] = df['DECILE'].astype(int)
         return df
 
 
-    def calculate_decile_returns(self, mv_neutral = True):
+    def calculate_decile_returns(self):
         """
         计算每个交易日期和分位数的平均日回报率
         :param df_with_decile 数据框，包含以下列：'TRADE_DT'（交易日期）,
@@ -216,29 +230,24 @@ class DecileAnalysis:
                                                 'DECILE'（分组标签）
         :return: 每日分组收益数据框及分层效果图
         """
-        df_with_decile = self.industry_neutral_decile(mv_neutral)
-        df_with_decile = df_with_decile.sort_values(by='TRADE_DT', ascending=True).reset_index(drop=True)
-        df_with_decile['STOCK_RETURN_NXTD'] = df_with_decile.groupby('S_INFO_WINDCODE')['STOCK_RETURN'].shift(-1)
-        df_with_decile = df_with_decile.dropna(subset=['STOCK_RETURN_NXTD'])
-        self.df_with_decile = df_with_decile
+        df_with_decile =  self.df_with_decile
 
-        mean_returns = df_with_decile.groupby(['TRADE_DT', 'DECILE'])['STOCK_RETURN_NXTD'].mean().reset_index()
+        mean_returns = df_with_decile.groupby(['TRADE_DT', 'DECILE'])['STOCK_RETURN'].mean().reset_index()
         trade_dates = df_with_decile['TRADE_DT'].unique()
 
         factor_decile_rt_df = pd.DataFrame({'TRADE_DT': np.repeat(trade_dates, self.decile_num),
                                             'DECILE': np.tile(np.arange(1, self.decile_num + 1), len(trade_dates))})
         factor_decile_rt_df = factor_decile_rt_df.merge(mean_returns, on=['TRADE_DT', 'DECILE'], how='left')
         factor_decile_rt_df = factor_decile_rt_df.sort_values(['TRADE_DT', 'DECILE'], ascending=[True, True])
-        factor_decile_rt_df['NAV'] = factor_decile_rt_df.groupby('DECILE')['STOCK_RETURN_NXTD'].transform(
+        factor_decile_rt_df['NAV'] = factor_decile_rt_df.groupby('DECILE')['STOCK_RETURN'].transform(
             lambda x: (1 + x).cumprod())
 
-        factor_decile_rt_df = pd.merge(factor_decile_rt_df, df_with_decile.groupby(['TRADE_DT', 'DECILE'])[f'{self.factor}'].mean().reset_index(),
+        factor_decile_rt_df = pd.merge(factor_decile_rt_df, df_with_decile.groupby(['TRADE_DT', 'DECILE'])[f'{self.factor}_LAG1'].mean().reset_index(),
                                        how='left', on=['TRADE_DT', 'DECILE'])
 
-        self.factor_decile_rt_df = factor_decile_rt_df
+        return factor_decile_rt_df
 
     def plot_decile_returns(self):
-        self.calculate_decile_returns()
         deciles = range(1, self.decile_num + 1)
         plt.ioff()
         plt.figure(figsize=(12, 8))
@@ -265,17 +274,64 @@ class DecileAnalysis:
         factor_decile_rt_df = self.factor_decile_rt_df
 
         long_short_df = factor_decile_rt_df.pivot(index='TRADE_DT', columns='DECILE',
-                                                  values=['STOCK_RETURN_NXTD', f'{self.factor}'])
-        long_short_df['long_short_rstr'] = long_short_df[f'{self.factor}', 5] - long_short_df[f'{self.factor}', 1]
-        long_short_df['long_short_diff'] = long_short_df['STOCK_RETURN_NXTD', 1] - long_short_df['STOCK_RETURN_NXTD', 5]
-        long_short_df['long_short_rt_adj'] = long_short_df['long_short_diff'] * (
-                1 / long_short_df['long_short_rstr'])
+                                                  values=['STOCK_RETURN', f'{self.factor}_LAG1'])
+        long_short_df[f'long_short_{self.factor}'] = long_short_df[f'{self.factor}_LAG1', 5] - long_short_df[f'{self.factor}_LAG1', 1]
+        long_short_df['long_short_diff'] = long_short_df['STOCK_RETURN', 1] - long_short_df['STOCK_RETURN', 5]
+        long_short_df['long_short_rt_adj'] = long_short_df['long_short_diff']
+        #long_short_df['long_short_rt_adj'] = long_short_df['long_short_diff'] * (1 / long_short_df[f'long_short_{self.factor}'])
         long_short_df['NAV_adj'] = (1 + long_short_df['long_short_rt_adj']).cumprod()
         long_short_df.reset_index(inplace=True)
 
-        self.long_short_df = long_short_df
+        if isinstance(long_short_df.columns, pd.MultiIndex):
+            long_short_df.columns = ['_'.join(map(str, col)).strip() if type(col) is tuple else col for col in
+                                     long_short_df.columns]
+        long_short_df.rename(columns={'TRADE_DT_': 'TRADE_DT',
+                                      'NAV_adj_': 'NAV_adj',
+                                      'long_short_rt_adj_': 'long_short_rt_adj'}, inplace=True)
 
         return long_short_df
+
+    def plot_long_short_NAV(self, double_axis = False):
+        benchmark = GetData.industry_index('8841388.WI')
+        benchmark['TRADE_DT'] = pd.to_datetime(benchmark['TRADE_DT'])
+        benchmark['S_DQ_PCTCHANGE'] = benchmark['S_DQ_PCTCHANGE'].astype(float)
+        benchmark['S_DQ_PCTCHANGE'] = benchmark['S_DQ_PCTCHANGE'] * 0.01
+        benchmark['NAV'] = (1 + benchmark['S_DQ_PCTCHANGE']).cumprod()
+
+        long_short_df = self.long_short_df
+
+        aligned_df = pd.merge(long_short_df[['TRADE_DT', 'NAV_adj']], benchmark[['TRADE_DT', 'NAV']], on='TRADE_DT',
+                              how='inner')
+
+        if double_axis:
+            fig, ax1 = plt.subplots(figsize=(10, 6))
+
+            ax1.plot(aligned_df['TRADE_DT'], aligned_df['NAV_adj'], color='blue',
+                     label='Long-Short Portfolio (Factor Exposure 1)')
+            ax1.set_xlabel('Time')
+            ax1.set_ylabel('Long-Short Portfolio', color='black')
+            ax1.tick_params(axis='y', labelcolor='black')
+
+            ax2 = ax1.twinx()
+            ax2.plot(aligned_df['TRADE_DT'], aligned_df['NAV'], color='red', label='EW A Index')
+            ax2.set_ylabel('EW A Index', color='black')
+            ax2.tick_params(axis='y', labelcolor='black')
+
+            ax1.set_title(f'{self.factor}: Long-short Portfolio NAV ')
+            ax1.legend(loc='upper left')
+            ax2.legend(loc='upper right')
+
+            plt.show()
+
+        else:
+            plt.figure(figsize=(12, 8))
+            plt.title('NAV')
+            plt.xlabel('Date')
+            plt.ylabel('Cumulative NAV')
+            plt.plot(aligned_df['TRADE_DT'], aligned_df['NAV_adj'], label='Long-Short Portfolio (Factor Exposure 1)')
+            plt.plot(aligned_df['TRADE_DT'], aligned_df['NAV'], label='EW A Index')
+            plt.legend()
+            plt.show()
 
 
     def _print_ic_metrics(self, df_type = 'decile'):
@@ -299,9 +355,9 @@ class DecileAnalysis:
             print("Value df_type must be 'decile' or 'stock'")
 
         for date, group in rt_factor_val_df.groupby('TRADE_DT'):
-            #group = group.dropna(subset=['DECILE', 'STOCK_RETURN_NXTD'])
-            factor_val = pd.to_numeric(group[f'{self.factor}'], errors='coerce')
-            future_return = pd.to_numeric(group['STOCK_RETURN_NXTD'], errors='coerce')
+            #group = group.dropna(subset=['DECILE', 'STOCK_RETURN'])
+            factor_val = pd.to_numeric(group[f'{self.factor}_LAG1'], errors='coerce')
+            future_return = pd.to_numeric(group['STOCK_RETURN'], errors='coerce')
 
             if len(factor_val) < 2 or factor_val.isnull().any() or future_return.isnull().any():
                 ic_values.append(np.nan)
@@ -334,17 +390,6 @@ class DecileAnalysis:
         })
 
         print(results)
-
-    def print_long_short_metrics(self):
-        print(f'Long-short portfolio return features of factor {self.factor}:')
-        self._print_metrics()
-
-        print(f'Decile factor value and returns IC_IR metrics of factor {self.factor}:')
-        self._print_ic_metrics(df_type='decile')
-
-    def print_icir_bystock(self):
-        print(f'Stock factor value and returns IC_IR metrics of factor {self.factor}:')
-        self._print_ic_metrics(df_type='stock')
 
     def _calculate_return_features(self):
         daily_return = self.long_short_df['long_short_rt_adj']
@@ -403,6 +448,17 @@ class DecileAnalysis:
         print(f"Daily Win Rate: {self.daily_win_rate:.2%}")
         print(f"Max Drawdown Start Date: {self.drawdown_start_date}")
         print(f"Max Drawdown End Date: {self.drawdown_end_date}")
+
+    def print_long_short_metrics(self):
+        print(f'Long-short portfolio return features of factor {self.factor}:')
+        self._print_metrics()
+
+        print(f'Decile factor value and returns IC_IR metrics of factor {self.factor}:')
+        self._print_ic_metrics(df_type='decile')
+
+    def print_icir_bystock(self):
+        print(f'Stock factor value and returns IC_IR metrics of factor {self.factor}:')
+        self._print_ic_metrics(df_type='stock')
 
 if __name__ == '__main__':
     all_mkt_mom = pd.read_parquet('/Users/xinyuezhang/Desktop/中量投/Project/ZLT-Project Barra/Data/all_market_momentum.parquet')
