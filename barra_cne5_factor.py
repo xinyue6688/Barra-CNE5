@@ -186,6 +186,10 @@ class Momentum(Calculation):
         :param df:
         :return:
         """
+        if 'RF_RETURN' not in df.columns:
+            rf_df = GetData.risk_free()
+            df = df.merge(rf_df, on = 'TRADE_DT', how = 'left')
+
         df['STOCK_RETURN'] = df['S_DQ_CLOSE'] / df['S_DQ_PRECLOSE'] - 1
         df['STOCK_RETURN'] = df['STOCK_RETURN'].astype('float')
 
@@ -229,6 +233,7 @@ class Size(Calculation):
         df = self.LNCAP(df)
         df['SIZE_CUBED'] = np.power(df['LNCAP'], 3)
         df['CONSTANT'] = 1
+        df = df.dropna(how='any')
         X = df[['LNCAP','CONSTANT']]
         y = df['SIZE_CUBED']
         model = sm.OLS(y, X).fit()

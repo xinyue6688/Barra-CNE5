@@ -277,8 +277,7 @@ class DecileAnalysis:
                                                   values=['STOCK_RETURN', f'{self.factor}_LAG1'])
         long_short_df[f'long_short_{self.factor}'] = long_short_df[f'{self.factor}_LAG1', 5] - long_short_df[f'{self.factor}_LAG1', 1]
         long_short_df['long_short_diff'] = long_short_df['STOCK_RETURN', 1] - long_short_df['STOCK_RETURN', 5]
-        long_short_df['long_short_rt_adj'] = long_short_df['long_short_diff']
-        #long_short_df['long_short_rt_adj'] = long_short_df['long_short_diff'] * (1 / long_short_df[f'long_short_{self.factor}'])
+        long_short_df['long_short_rt_adj'] = long_short_df['long_short_diff'] * (1 / long_short_df[f'long_short_{self.factor}'])
         long_short_df['NAV_adj'] = (1 + long_short_df['long_short_rt_adj']).cumprod()
         long_short_df.reset_index(inplace=True)
 

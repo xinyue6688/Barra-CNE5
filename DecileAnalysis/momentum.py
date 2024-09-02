@@ -1,17 +1,14 @@
 # -*- coding = utf-8 -*-
 # @Time: 2024/07/19
 # @Author: Xinyue
-# @File:size_factor_analysis.py
+# @File:xxx.py
 # @Software: PyCharm
 
 import pandas as pd
-import numpy as np
-from datetime import datetime
 
 
-from barra_cne5_factor import Size
+from barra_cne5_factor import Momentum
 from Utils.decile_analysis import DecileAnalysis
-from Utils.data_clean import DataProcess
 
 '''
 all_price_df = GetData.all_price()
@@ -25,24 +22,19 @@ all_market_data.to_parquet('Data/all_market_data.parquet')
 '''
 
 # 全市场去除北交所，格式：日期、股票代码、昨收、今收、市值、行业
-all_market_data = pd.read_parquet('Data/all_market_data.parquet')
+all_market_data = pd.read_parquet('../Data/all_market_data.parquet')
 all_market_data = all_market_data[~all_market_data['S_INFO_WINDCODE'].str.endswith('BJ')]
 
-# 创建计算市值因子实例
-size_calculator = Size()
-all_market_lncap_df = size_calculator.LNCAP(all_market_data)
-print(all_market_lncap_df.head())
+# 创建计算动量因子实例
+calculate_mom = Momentum()
+all_market_rstr = calculate_mom.RSTR(all_market_data)
+all_market_rstr = all_market_rstr.dropna(subset = ['RSTR'])
 
 # 创建市值分层分析实例
-lncap_analysis = DecileAnalysis(all_market_lncap_df, decile_num=5, factor='LNCAP', rebal_freq='w', mv_neutral=False, trade_pool=True)
-df_with_decile = lncap_analysis.df_with_decile
-lncap_analysis.plot_decile_returns()
-lncap_analysis.plot_long_short_NAV()
-lncap_analysis.print_long_short_metrics()
-lncap_analysis.print_icir_bystock()
-
-
-
-
-
+rstr_analysis = DecileAnalysis(all_market_rstr, decile_num=5, factor='RSTR', rebal_freq='w', mv_neutral=False, trade_pool=True)
+df_with_decile = rstr_analysis.df_with_decile
+rstr_analysis.plot_decile_returns()
+rstr_analysis.plot_long_short_NAV(double_axis=True)
+rstr_analysis.print_long_short_metrics()
+rstr_analysis.print_icir_bystock()
 
