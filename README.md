@@ -6,7 +6,7 @@
 
 *barra_cne5_factor.py*
 
-- Contrcution of style factors
+- Constrcution of style factors
 
 *DecileAnalysis*
 
