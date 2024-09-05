@@ -276,7 +276,10 @@ class DecileAnalysis:
         long_short_df = factor_decile_rt_df.pivot(index='TRADE_DT', columns='DECILE',
                                                   values=['STOCK_RETURN', f'{self.factor}_LAG1'])
         long_short_df[f'long_short_{self.factor}'] = long_short_df[f'{self.factor}_LAG1', 5] - long_short_df[f'{self.factor}_LAG1', 1]
-        long_short_df['long_short_diff'] = long_short_df['STOCK_RETURN', 1] - long_short_df['STOCK_RETURN', 5]
+        if (1 + long_short_df['STOCK_RETURN', 1]).cumprod().iloc[-1] > (1 + long_short_df['STOCK_RETURN', 5]).cumprod().iloc[-1]:
+            long_short_df['long_short_diff'] = long_short_df['STOCK_RETURN', 1] - long_short_df['STOCK_RETURN', 5]
+        else:
+            long_short_df['long_short_diff'] = long_short_df['STOCK_RETURN', 5] - long_short_df['STOCK_RETURN', 1]
         long_short_df['long_short_rt_adj'] = long_short_df['long_short_diff'] * (1 / long_short_df[f'long_short_{self.factor}'])
         long_short_df['NAV_adj'] = (1 + long_short_df['long_short_rt_adj']).cumprod()
         long_short_df.reset_index(inplace=True)
@@ -291,7 +294,7 @@ class DecileAnalysis:
         return long_short_df
 
     def plot_long_short_NAV(self, double_axis = False):
-        benchmark = GetData.industry_index('8841388.WI')
+        benchmark = GetData.wind_index('8841388.WI')
         benchmark['TRADE_DT'] = pd.to_datetime(benchmark['TRADE_DT'])
         benchmark['S_DQ_PCTCHANGE'] = benchmark['S_DQ_PCTCHANGE'].astype(float)
         benchmark['S_DQ_PCTCHANGE'] = benchmark['S_DQ_PCTCHANGE'] * 0.01

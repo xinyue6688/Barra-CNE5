@@ -121,7 +121,7 @@ class GetData(ConnectDatabase):
         return df
 
     @staticmethod
-    def industry_index(index_code: str):
+    def wind_index(index_code: str):
         fields_sql = 'S_INFO_WINDCODE , TRADE_DT, S_DQ_PCTCHANGE'
         table = 'AINDEXWINDINDUSTRIESEOD'
 
@@ -137,6 +137,98 @@ class GetData(ConnectDatabase):
         df.reset_index(drop=True, inplace=True)
         return df
 
+    @staticmethod
+    def mkt_index(index_code: str):
+        fields_sql = 'S_INFO_WINDCODE, TRADE_DT, S_DQ_PRECLOSE, S_DQ_CLOSE'
+
+        sql = f'''SELECT {fields_sql}               
+                             FROM AINDEXEODPRICES
+                             WHERE (TRADE_DT BETWEEN '{START_DATE}' AND '{END_DATE}')
+                             AND (S_INFO_WINDCODE = '{index_code}')
+                          '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.sort_values(by='TRADE_DT', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    @staticmethod
+    def analyst_earnest(stock_code: str):
+        fields_sql = 'S_INFO_WINDCODE, EST_DT, REPORTING_PERIOD, S_EST_ENDDATE, S_EST_PE'
+
+        sql = f'''
+                SELECT {fields_sql}
+                FROM ASHAREEARNINGEST
+                WHERE S_INFO_WINDCODE = '{stock_code}'
+        '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.sort_values(by='EST_DT', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    @staticmethod
+    def pb_ratio_all():
+        fields_sql = 'S_INFO_WINDCODE, TRADE_DT, S_VAL_PB_NEW'
+
+        sql = f'''
+                SELECT {fields_sql}
+                FROM ASHAREEODDERIVATIVEINDICATOR
+                WHERE TRADE_DT BETWEEN '{START_DATE}' AND '{END_DATE}'
+                '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.sort_values(by='TRADE_DT', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    @staticmethod
+    def balancesheet_data():
+        fields_sql = 'S_INFO_WINDCODE, ANN_DT, LT_BORROW, TOT_LIAB, TOT_ASSETS'
+
+        sql = f'''
+                SELECT {fields_sql} 
+                FROM ASHAREBALANCESHEET
+                WHERE (ANN_DT BETWEEN '{START_DATE}' AND '{END_DATE}')
+                AND (REPORT_PERIOD BETWEEN '{START_DATE}' AND '{END_DATE}')
+                AND (REPORT_PERIOD LIKE '%1231' OR REPORT_PERIOD LIKE '%0630')
+                AND (STATEMENT_TYPE = '408001000')
+                '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.sort_values(by='ANN_DT', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        df.rename(columns={'LT_BORROW': 'LD',
+                           'TOT_LIAB': 'TD',
+                           'TOT_ASSETS': 'TA'}, inplace=True)
+        return df
+
+    @staticmethod
+    def capital():
+        sql = f'''
+                SELECT S_INFO_WINDCODE, CHANGE_DT, S_SHARE_NTRD_PRFSHARE
+                FROM ASHARECAPITALIZATION 
+        '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        return df
+
+    @staticmethod
+    def bps():
+        sql = f'''
+                SELECT S_INFO_WINDCODE, ANN_DT, S_FA_BPS
+                FROM ASHAREFINANCIALINDICATOR
+                WHERE REPORT_PERIOD BETWEEN '{START_DATE}' AND '{END_DATE}'
+        '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        return df
 
 class Calculation:
     @staticmethod
@@ -176,6 +268,79 @@ class Calculation:
         data.drop(columns=[f'{factor_column}_wsr', f'{factor_column}_pp'], inplace=True)
 
         return data
+
+    @staticmethod
+    def _cumulative_range(x):
+        T = np.arange(1, 13)
+        cumulative_ranges = [x[-(t * 21):].sum() for t in T]
+        return np.max(cumulative_ranges) - np.min(cumulative_ranges)
+
+    @staticmethod
+    def _weighted_regress(df, weight = 1):
+        y = df['STOCK_RETURN'] - df['RF_RETURN']
+        X = df[['CONSTANT', 'MKT_RETURN']]
+        model = sm.WLS(y, X, weights=weight).fit()
+        alpha, beta = model.params.iloc[0], model.params.iloc[1]
+        return alpha, beta
+
+
+class Beta(Calculation):
+
+    def __init__(self, df):
+        self.rf_df = pd.read_parquet('/Volumes/quanyi4g/factor/day_frequency/fundamental/RiskFree/risk_free.parquet')
+        self.csi_df = GetData.mkt_index('000985.CSI')
+        self.csi_df['TRADE_DT'] = pd.to_datetime(self.csi_df['TRADE_DT'])
+        self.csi_df['MKT_RETURN'] = self.csi_df['S_DQ_CLOSE'] / self.csi_df['S_DQ_PRECLOSE'] - 1
+        self.csi_df['MKT_RETURN'] = self.csi_df['MKT_RETURN'].astype(float)
+        self.beta_df = self.BETA(df)
+
+    def BETA(self, df):
+
+        df['STOCK_RETURN'] = df['S_DQ_CLOSE'] / df['S_DQ_PRECLOSE'] - 1
+        df['STOCK_RETURN'] = df['STOCK_RETURN'].astype('float')
+
+        # 合并市场收益
+        df = df.merge(self.csi_df[['TRADE_DT', 'MKT_RETURN']], on='TRADE_DT', how='left')
+        # 合并无风险收益
+        if 'RF_RETURN' not in df.columns:
+            df = df.merge(self.rf_df, on='TRADE_DT', how='left')
+
+        exp_weight = self._exp_weight(window=252, half_life=63)
+        df['ALPHA'] = np.nan
+        df['BETA'] = np.nan
+
+        grouped = df.groupby('S_INFO_WINDCODE')
+
+        for stock_code, group in grouped:
+            if group[group['TRADE_DT'] > '2010-01-01'].empty:
+                continue
+
+            elif len(group) < 252:
+                continue
+
+            else:
+                group['CONSTANT'] = 1
+                alphas = []
+                betas = []
+
+                for i in range(251, len(group)):
+                    window_data = group.iloc[i - 251:i + 1]
+                    alpha, beta = self._weighted_regress(window_data, exp_weight)
+                    alphas.append(alpha)
+                    betas.append(beta)
+
+                # Store the results, shifting by one period
+                original_df_index = grouped.indices[f'{stock_code}']
+                df.loc[original_df_index[251:], 'ALPHA'] = np.array(alphas)
+                df.loc[original_df_index[251:], 'BETA'] = np.array(betas)
+                df.loc[original_df_index, 'ALPHA'] = df.loc[original_df_index, 'ALPHA'].shift(1)
+                df.loc[original_df_index, 'BETA'] = df.loc[original_df_index, 'BETA'].shift(1)
+
+        df['SIGMA'] = df['STOCK_RETURN']- df['RF_RETURN'] - (df['ALPHA'] + df['BETA'] * df['MKT_RETURN'])
+
+        return df
+
+
 
 
 class Momentum(Calculation):
@@ -243,6 +408,123 @@ class Size(Calculation):
 
         df.drop(columns=['SIZE_CUBED', 'LNCAP', 'CONSTANT'], inplace=True)
         return df
+
+#class EarningsYield(Calculation):
+    # TODO: 找一下万得分析师预测的数据
+
+class ResidualVolatility(Calculation):
+
+
+    def DASTD(self, df):
+        df['STOCK_RETURN'] = df['S_DQ_CLOSE'] / df['S_DQ_PRECLOSE'] - 1
+        df['STOCK_RETURN'] = df['STOCK_RETURN'].astype('float')
+        exp_weight = self._exp_weight(window = 252, half_life = 42)
+        df['DASTD'] = np.nan
+
+        grouped = df.groupby('S_INFO_WINDCODE')
+
+        for stock_code, group in grouped:
+            if len(group) < 252:
+                print(f'Not enough data to calculate DASTD for {stock_code}')
+                continue
+
+            else:
+                try:
+                    group['DASTD'] = group['STOCK_RETURN'].rolling(window=252).apply(
+                        lambda x: np.sum(np.std(x) * exp_weight))
+
+                    df.loc[group.index, 'DASTD'] = group['DASTD']
+
+                except Exception as e:
+                    print(f'Error processing {stock_code}: {e}')
+                    df.loc[group.index, 'DASTD'] = np.nan
+
+        return df['DASTD']
+
+    def CMRA(self, df):
+        if 'RF_RETURN' not in df.columns:
+            rf_df = GetData.risk_free()
+            df = df.merge(rf_df, on = 'TRADE_DT', how = 'left')
+
+        df['CMRA'] = np.nan
+        grouped = df.groupby('S_INFO_WINDCODE')
+
+        for stock_code, group in grouped:
+            if len(group) < 252:
+                print(f'Not enough data to calculate CMRA for {stock_code}')
+                continue
+
+            else:
+                try:
+                    group['ELR'] = np.log(1 + group['STOCK_RETURN']) - np.log(1 + group['RF_RETURN'])
+                    group['CMRA'] = group['ELR'].rolling(window=252).apply(
+                        lambda x: self._cumulative_range(x), raw=True)
+                    df.loc[group.index, 'CMRA'] = group['CMRA']
+
+                except Exception as e:
+                    print(f'Error processing {stock_code}: {e}')
+                    df.loc[group.index, 'CMRA'] = np.nan
+
+        return df['CMRA']
+
+    @staticmethod
+    def _cumulative_range(x):
+        T = np.arange(1, 13)
+        cumulative_ranges = [x[-(t * 21):].sum() for t in T]
+        return np.max(cumulative_ranges) - np.min(cumulative_ranges)
+
+    def HSIGMA(self, df):
+        df['HSIGMA'] = np.nan
+        #exp_weight = self._exp_weight(window=252, half_life=62)
+        grouped = df.groupby('S_INFO_WINDCODE')
+
+        for stock_code, group in grouped:
+            if len(group) < 252:
+                print(f'Not enough data to calculate HSIGMA for {stock_code}')
+                continue
+            group['HSIGMA'] = group['SIGMA'].ewm(halflife=63, span = None, min_periods = 252).std()
+            df.loc[group.index, 'HSIGMA'] = group['HSIGMA']
+
+        return df['HSIGMA']
+    
+    def RESVOL(self, df):
+        df['DASTD'] = self.DASTD(df)
+        df['CMRA'] = self.CMRA(df)
+        df['HSIGMA'] = self.HSIGMA(df)
+
+        df['RESVOL'] = 0.74 * df['DASTD'] + 0.16 * df['CMRA'] + 0.1 * df['HSIGMA']
+
+        df = df.dropna(subset = ['RESVOL', 'BETA'])
+        df['CONSTANT'] = 1
+        orth_function = sm.OLS(df['RESVOL'], df[['BETA', 'CONSTANT']]).fit()
+        df['RESVOL'] = orth_function.resid
+        df = self._preprocess(df, factor_column = 'RESVOL')
+
+        return df
+
+
+class btop(GetData):
+
+    def __init__(self):
+        self.pb_df = GetData.pb_ratio_all()
+        self.pb_df['TRADE_DT'] = pd.to_datetime(self.pb_df['TRADE_DT'])
+
+    def BTOP(self, df):
+        df = df.merge(self.pb_df, on=['S_INFO_WINDCODE', 'TRADE_DT'], how='left')
+        df['BTOP'] = 1/df['S_VAL_PB_NEW']
+        df['BTOP'] = df['BTOP'].astype('float')
+        df.drop(columns=['S_VAL_PB_NEW'], inplace=True)
+        return df
+
+
+class leverage(GetData):
+
+    def __init__(self):
+        self.balance_data = GetData.balancesheet_data()
+        self.ncapital_data = GetData.capital()
+        self.bppershare_data = GetData.bps()
+
+
 
 
 if __name__ == '__main__':
