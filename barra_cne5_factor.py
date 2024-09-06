@@ -230,6 +230,19 @@ class GetData(ConnectDatabase):
         df = connection.get_data()
         return df
 
+    @staticmethod
+    def turnover_all():
+        sql = f'''
+            SELECT S_INFO_WINDCODE, TRADE_DT, S_DQ_TURN
+            FROM ASHAREEODDERIVATIVEINDICATOR
+            WHERE TRADE_DT BETWEEN '{START_DATE}' AND '{END_DATE}'
+        '''
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        return df
+
+
+
 class Calculation:
     @staticmethod
     def _exp_weight(window, half_life):
@@ -262,6 +275,8 @@ class Calculation:
         return standardized
 
     def _preprocess(self, data, factor_column):
+        if data[f'{factor_column}'].dtype != np.float64:
+            data[f'{factor_column}'] = data[f'{factor_column}'].astype(np.float64)
         data[f'{factor_column}_wsr'] = data.groupby('TRADE_DT')[f'{factor_column}'].transform(lambda x: self._winsorize(x))
         data[f'{factor_column}_pp'] = data.groupby('TRADE_DT').apply(lambda g: self._standardize(g[f'{factor_column}_wsr'], g['S_VAL_MV'])).reset_index(level=0, drop=True)
         data[f'{factor_column}'] = data[f'{factor_column}_pp']
@@ -517,12 +532,134 @@ class btop(GetData):
         return df
 
 
-class leverage(GetData):
+class leverage(GetData, Calculation):
 
-    def __init__(self):
+    def __init__(self, df):
         self.balance_data = GetData.balancesheet_data()
         self.ncapital_data = GetData.capital()
         self.bppershare_data = GetData.bps()
+        self.df = df.sort_values('TRADE_DT')
+        self._prep_data()
+        
+        
+    def _prep_data(self):
+        # 每个交易日合并到最新披露的长期负债、总负债、和总资产
+        self.balance_data['ANN_DT'] = pd.to_datetime(self.balance_data['ANN_DT'])
+        self.balance_data = self.balance_data.sort_values('ANN_DT')
+        self.df = pd.merge_asof(
+            self.df,
+            self.balance_data,
+            by='S_INFO_WINDCODE',
+            left_on='TRADE_DT',
+            right_on='ANN_DT',
+            direction='backward'
+        )
+
+        # 每股净资产
+        self.bppershare_data.dropna(how='any', inplace=True)
+        self.bppershare_data['ANN_DT'] = pd.to_datetime(self.bppershare_data['ANN_DT'])
+        self.bppershare_data = self.bppershare_data.sort_values('ANN_DT')
+
+        self.df = pd.merge_asof(
+            self.df,
+            self.bppershare_data,
+            by='S_INFO_WINDCODE',
+            left_on='TRADE_DT',
+            right_on='ANN_DT',
+            direction='backward'
+        )
+
+        # 优先股股数（单位万）
+        self.ncapital_data.dropna(how='any', inplace=True)
+        self.ncapital_data['CHANGE_DT'] = pd.to_datetime(self.ncapital_data['CHANGE_DT'])
+        self.ncapital_data = self.ncapital_data.sort_values('CHANGE_DT')
+
+        self.df = pd.merge_asof(
+            self.df,
+            self.ncapital_data,
+            by='S_INFO_WINDCODE',
+            left_on='TRADE_DT',
+            right_on='CHANGE_DT',
+            direction='backward'
+        )
+
+        # 删除不需要的日期标注列
+        self.df = self.df.drop(columns=['ANN_DT_x', 'ANN_DT_y', 'CHANGE_DT'])
+        self.df['PE'] = self.df['S_FA_BPS'] * self.df['S_SHARE_NTRD_PRFSHARE']
+
+        # 删除需要用到的数据中有空值的列
+        self.df = self.df.dropna(subset=['LD', 'TD', 'TA', 'PE'])
+
+        self.df['ME'] = self.df['S_VAL_MV'].copy()
+        self.df['BE'] = (self.df['ME'] / self.df['S_DQ_CLOSE']) * self.df['S_FA_BPS']
+        self.df.drop(columns=['S_FA_BPS', 'S_SHARE_NTRD_PRFSHARE'], inplace=True)
+        
+    def MLEV(self):
+        self.df['MLEV'] = (self.df['ME'] + self.df['PE'] + self.df['LD']) / self.df['ME']
+        self.df = self._preprocess(self.df, 'MLEV')
+        
+    def DTOA(self):
+        self.df['TD'] = self.df['TD'].astype('float')
+        self.df['TA'] = self.df['TA'].astype('float')
+        self.df['DTOA'] = self.df['TD'] / self.df['TA']
+        self.df = self._preprocess(self.df, 'DTOA')
+
+    def BLEV(self):
+        self.df['BE'] = self.df['BE'].astype('float')
+        self.df['PE'] = self.df['PE'].astype('float')
+        self.df['LD'] = self.df['LD'].astype('float')
+
+        self.df['BLEV'] = (self.df['BE'] + self.df['PE'] + self.df['LD']) / \
+                                   self.df['BE']
+        self.df = self._preprocess(data=self.df, factor_column='BLEV')
+
+    def LEVERAGE(self):
+        self.MLEV()
+        self.DTOA()
+        self.BLEV()
+        self.df['LEVERAGE'] = 0.38 * self.df['MLEV'] + 0.35 * self.df['DTOA'] + 0.27 * self.df['BLEV']
+        self.df = self._preprocess(self.df, 'LEVERAGE')
+
+        return self.df
+
+
+class liquidity(GetData, Calculation):
+
+    def __init__(self, df):
+        self.turnover_df = GetData.turnover_all()
+        self.turnover_df['TRADE_DT'] = pd.to_datetime(self.turnover_df['TRADE_DT'])
+        self.all_mkt_turnover = pd.merge(df, self.turnover_df, on = ['S_INFO_WINDCODE', 'TRADE_DT'], how = 'left')
+        self.all_mkt_turnover = self.all_mkt_turnover.sort_values(by='TRADE_DT')
+
+    def LIQUIDITY(self):
+        # 按日期升序排列
+        df = self.all_mkt_turnover
+        df['STOM'] = np.nan
+        df['STOQ'] = np.nan
+        df['STOA'] = np.nan
+        df['LIQUIDITY'] = np.nan
+        # 按标的分组
+        grouped = df.groupby('S_INFO_WINDCODE')
+
+        for stock_code, group in grouped:
+            if len(group) >= 21:
+                df.loc[group.index, 'STOM'] = group['S_DQ_TURN'].rolling(window=21).apply(lambda x: np.log(np.sum(x)),
+                                                                                          raw=False)
+            if len(group) >= 63:
+                df.loc[group.index, 'STOQ'] = group['S_DQ_TURN'].rolling(window=63).apply(
+                lambda x: np.log(1/3 * np.sum(x)), raw=False)
+
+            if len(group) >= 252:
+                df.loc[group.index, 'STOA'] = group['S_DQ_TURN'].rolling(window=252).apply(
+                    lambda x: np.log(1 / 12 * np.sum(x)), raw=False)
+
+        df['LIQUIDITY'] = 0.35 * df['STOM'] + 0.35 * df['STOQ'] + 0.3 * df['STOA']
+
+        return df
+
+
+
+
 
 
 
