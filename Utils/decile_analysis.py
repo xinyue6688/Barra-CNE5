@@ -11,6 +11,7 @@ import pandas as pd
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr, spearmanr
+import scipy.stats as stats
 
 from Utils.return_metrics import MetricsCalculator
 from barra_cne5_factor import GetData
@@ -351,15 +352,19 @@ class DecileAnalysis:
         rank_ic_values = []
         if df_type == 'decile':
             rt_factor_val_df = self.factor_decile_rt_df
+            grouped = rt_factor_val_df.groupby('TRADE_DT')
         elif df_type == 'stock':
             rt_factor_val_df = self.df_with_decile
+            grouped = rt_factor_val_df.groupby(['TRADE_DT', 'WIND_PRI_IND'])
         else:
             print("Value df_type must be 'decile' or 'stock'")
 
-        for date, group in rt_factor_val_df.groupby('TRADE_DT'):
+        for group in grouped:
+
+            group_df = group[1]
             #group = group.dropna(subset=['DECILE', 'STOCK_RETURN'])
-            factor_val = pd.to_numeric(group[f'{self.factor}_LAG1'], errors='coerce')
-            future_return = pd.to_numeric(group['STOCK_RETURN'], errors='coerce')
+            factor_val = pd.to_numeric(group_df[f'{self.factor}_LAG1'], errors='coerce')
+            future_return = pd.to_numeric(group_df['STOCK_RETURN'], errors='coerce')
 
             if len(factor_val) < 2 or factor_val.isnull().any() or future_return.isnull().any():
                 ic_values.append(np.nan)
@@ -376,9 +381,11 @@ class DecileAnalysis:
         rank_ic_series = pd.Series(rank_ic_values)
 
         ic = ic_series.mean()
-        ic_t_stat = ic/(ic_series.std()/np.sqrt(len(ic_series)))
+        ic_series = ic_series.dropna()
+        ic_t_stat, _ = stats.ttest_1samp(a=ic_series, popmean=0)
         rank_ic = rank_ic_series.mean()
-        rank_ic_t_stat = rank_ic / (rank_ic_series.std() / np.sqrt(len(rank_ic_series)))
+        rank_ic_series = rank_ic_series.dropna()
+        rank_ic_t_stat, _ = stats.ttest_1samp(a=rank_ic_series, popmean=0)
         icir = ic_series.mean() / ic_series.std()
         rank_icir = rank_ic_series.mean() / rank_ic_series.std()
 
