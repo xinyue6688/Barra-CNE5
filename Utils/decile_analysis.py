@@ -30,7 +30,7 @@ class lazyproperty:
 
 class DecileAnalysis:
 
-    def __init__(self, df, decile_num, factor, rebal_freq, mv_neutral= True, trade_pool = False):
+    def __init__(self, df, decile_num, factor, rebal_freq, mv_neutral= False, trade_pool = True):
         self.factor = factor
         self.clean_df = self._clean_data(df)
         self.decile_num = decile_num
@@ -276,6 +276,7 @@ class DecileAnalysis:
 
         long_short_df = factor_decile_rt_df.pivot(index='TRADE_DT', columns='DECILE',
                                                   values=['STOCK_RETURN', f'{self.factor}_LAG1'])
+        long_short_df.dropna(inplace=True)
         long_short_df[f'long_short_{self.factor}'] = long_short_df[f'{self.factor}_LAG1', 5] - long_short_df[f'{self.factor}_LAG1', 1]
         if (1 + long_short_df['STOCK_RETURN', 1]).cumprod().iloc[-1] > (1 + long_short_df['STOCK_RETURN', 5]).cumprod().iloc[-1]:
             long_short_df['long_short_diff'] = long_short_df['STOCK_RETURN', 1] - long_short_df['STOCK_RETURN', 5]

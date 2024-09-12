@@ -29,7 +29,7 @@ all_mkt_leverage = leverage_calculator.LEVERAGE()
 grouped = all_mkt_leverage.groupby('S_INFO_WINDCODE')
 for stock_code, group in grouped:
     data = group[['S_INFO_WINDCODE', 'TRADE_DT', 'LEVERAGE']]
-    data.to_parquet(f'/Volumes/quanyi4g/factor/day_frequency/barra/Leverage/{stock_code.replace('.','_')}_leverage', index=False)
+    data.to_parquet(f'/Volumes/quanyi4g/factor/day_frequency/barra/Leverage/{stock_code.replace('.','_')}_leverage.parquet', index=False)
 
 # 创建杠杆因子分层分析实例
 leverage_analysis = DecileAnalysis(all_mkt_leverage, decile_num=5, factor='LEVERAGE', rebal_freq='w', mv_neutral=False, trade_pool=True)

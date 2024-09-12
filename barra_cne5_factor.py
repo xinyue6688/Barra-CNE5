@@ -154,22 +154,6 @@ class GetData(ConnectDatabase):
         return df
 
     @staticmethod
-    def analyst_earnest(stock_code: str):
-        fields_sql = 'S_INFO_WINDCODE, EST_DT, REPORTING_PERIOD, S_EST_ENDDATE, S_EST_PE'
-
-        sql = f'''
-                SELECT {fields_sql}
-                FROM ASHAREEARNINGEST
-                WHERE S_INFO_WINDCODE = '{stock_code}'
-        '''
-
-        connection = ConnectDatabase(sql)
-        df = connection.get_data()
-        df.sort_values(by='EST_DT', inplace=True)
-        df.reset_index(drop=True, inplace=True)
-        return df
-
-    @staticmethod
     def pb_ratio_all():
         fields_sql = 'S_INFO_WINDCODE, TRADE_DT, S_VAL_PB_NEW'
 
@@ -241,6 +225,96 @@ class GetData(ConnectDatabase):
         df = connection.get_data()
         return df
 
+    @staticmethod
+    def est_consensus():
+        sql = f'''
+            SELECT S_INFO_WINDCODE, EST_DT, NET_PROFIT_AVG, S_EST_YEARTYPE
+            FROM ASHARECONSENSUSDATA
+            WHERE (EST_DT BETWEEN '{START_DATE}' AND '{END_DATE}')
+            AND (EST_REPORT_DT BETWEEN '{START_DATE}' AND '{END_DATE}')
+        '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.sort_values(by = 'EST_DT', inplace = True)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    @staticmethod
+    def est_consensus_rolling_FY1():
+        sql = f'''
+                SELECT S_INFO_WINDCODE, EST_DT, EST_PE
+                FROM ASHARECONSENSUSROLLINGDATA
+                WHERE (EST_DT BETWEEN '{START_DATE}' AND '{END_DATE}')
+                AND (ROLLING_TYPE = 'FY1')
+            '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.sort_values(by='EST_DT', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    @staticmethod
+    def est_consensus_rolling_FY0(wind_code):
+        sql = f'''
+                SELECT S_INFO_WINDCODE, EST_DT, EST_PE
+                FROM ASHARECONSENSUSROLLINGDATA
+                WHERE (EST_DT BETWEEN '{START_DATE}' AND '{END_DATE}')
+                AND (ROLLING_TYPE = 'FY0')
+                AND (S_INFO_WINDCODE = '{wind_code}')
+            '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.sort_values(by='EST_DT', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    @staticmethod
+    def ttmhis_all():
+        sql = f'''
+            SELECT S_INFO_WINDCODE, ANN_DT, REPORT_PERIOD, NET_PROFIT_TTM, NET_INCR_CASH_CASH_EQU_TTM
+            FROM ASHARETTMHIS
+            WHERE (ANN_DT BETWEEN '{START_DATE}' AND '{END_DATE}')
+            AND (REPORT_PERIOD BETWEEN '{START_DATE}' AND '{END_DATE}')
+            AND (REPORT_PERIOD LIKE '%1231' OR REPORT_PERIOD LIKE '%0630')
+        '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.rename(columns = {'NET_PROFIT_TTM': 'EARNINGS_TTM',
+                             'NET_INCR_CASH_CASH_EQU_TTM': 'CASH_EARNINGS_TTM'}, inplace = True)
+        return df
+
+    @staticmethod
+    def financialid_all():
+        sql = f'''
+            SELECT S_INFO_WINDCODE, ANN_DT, REPORT_PERIOD, S_FA_GRPS, S_FA_EPS_BASIC
+            FROM ASHAREFINANCIALINDICATOR
+            WHERE (REPORT_PERIOD LIKE '%1231%')
+            AND (REPORT_PERIOD BETWEEN '{START_DATE}' AND '{END_DATE}')
+        '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.sort_values(by = 'ANN_DT', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    @staticmethod
+    def consensus_factor():
+        sql = f'''
+         SELECT S_INFO_WINDCODE, TRADE_DT, S_WEST_NETPROFIT_FTM_CHG_1M, S_WEST_NETPROFIT_FTM_CHG_6M
+         FROM CONCENSUSEXPECTATIONFACTOR
+         WHERE TRADE_DT BETWEEN '{START_DATE}' AND '{END_DATE}'
+        '''
+
+        connection = ConnectDatabase(sql)
+        df = connection.get_data()
+        df.rename(columns = {'S_WEST_NETPROFIT_FTM_CHG_1M': 'EGIBS_s',
+                             'S_WEST_NETPROFIT_FTM_CHG_6M': 'EGIBS'}, inplace=True)
+        return df
 
 
 class Calculation:
@@ -297,6 +371,19 @@ class Calculation:
         model = sm.WLS(y, X, weights=weight).fit()
         alpha, beta = model.params.iloc[0], model.params.iloc[1]
         return alpha, beta
+
+    @staticmethod
+    def _regress_w_time(x, n_time):
+        if len(x) < n_time:
+            return np.nan
+        else:
+            T = np.arange(1, n_time + 1, 1)
+            T = sm.add_constant(T)
+            model = sm.OLS(x, T).fit()
+        if np.sum(x) != 0:
+            return model.params.iloc[1] / np.mean(x)
+        else:
+            return model.params.iloc[1] / np.mean(x[1:])
 
 
 class Beta(Calculation):
@@ -424,8 +511,51 @@ class Size(Calculation):
         df.drop(columns=['SIZE_CUBED', 'LNCAP', 'CONSTANT'], inplace=True)
         return df
 
-#class EarningsYield(Calculation):
-    # TODO: 找一下万得分析师预测的数据
+class EarningsYield(GetData, Calculation):
+
+    def __init__(self, df):
+        self.prepared_df = self._prepare_data(df)
+
+    def _prepare_data(self, df):
+        epibs_df = GetData.est_consensus_rolling_FY1()
+        epibs_df = epibs_df[~epibs_df['S_INFO_WINDCODE'].str.endswith('BJ')]
+        epibs_df['EPIBS'] = 1 / epibs_df['EST_PE']
+
+        grouped = epibs_df.groupby('S_INFO_WINDCODE')
+        for stock_code, group in grouped:
+            if group['EPIBS'].isna().all():
+                epibs_df = epibs_df.drop(group.index)
+
+                epibs_fy0_df = GetData.est_consensus_rolling_FY0(stock_code)
+                epibs_fy0_df['EPIBS'] = 1 / epibs_fy0_df['EST_PE']
+
+                epibs_df = pd.concat([epibs_df, epibs_fy0_df], ignore_index=True)
+
+        epibs_df['EST_DT'] = pd.to_datetime(epibs_df['EST_DT'])
+        self.df = pd.merge(
+            df,
+            epibs_df,
+            left_on = ['S_INFO_WINDCODE', 'TRADE_DT'],
+            right_on = ['S_INFO_WINDCODE', 'EST_DT']
+        )
+
+        earnings_df = GetData.ttmhis_all()
+        earnings_df.sort_values(by='ANN_DT', inplace=True)
+        earnings_df['ANN_DT'] = pd.to_datetime(earnings_df['ANN_DT'])
+        earnings_df['REPORT_PERIOD'] = pd.to_datetime(earnings_df['REPORT_PERIOD'])
+        earnings_df = earnings_df[(earnings_df['ANN_DT'] - earnings_df['REPORT_PERIOD']) < pd.Timedelta(days=365)]
+        earnings_df.reset_index(drop=True, inplace=True)
+
+        self.df = self.df.sort_values(by='TRADE_DT')
+        self.df = pd.merge_asof(
+            self.df,
+            earnings_df,
+            by='S_INFO_WINDCODE',
+            left_on='TRADE_DT',
+            right_on='ANN_DT',
+            direction='backward'
+        )
+
 
 class ResidualVolatility(Calculation):
 
@@ -623,7 +753,7 @@ class leverage(GetData, Calculation):
         return self.df
 
 
-class liquidity(GetData, Calculation):
+class liquidity(GetData):
 
     def __init__(self, df):
         self.turnover_df = GetData.turnover_all()
@@ -658,7 +788,48 @@ class liquidity(GetData, Calculation):
         return df
 
 
+class growth(GetData, Calculation):
 
+    def __init__(self, df):
+        self.df = df
+        self.growth_df = GetData.financialid_all()
+        self.growth_df['S_FA_GRPS'] = self.growth_df.groupby('REPORT_PERIOD')['S_FA_GRPS'].transform(
+            lambda x: x.fillna(x.mean()))
+        self.growth_df['S_FA_EPS_BASIC'] = self.growth_df.groupby('REPORT_PERIOD')['S_FA_EPS_BASIC'].transform(
+            lambda x: x.fillna(x.mean()))
+        self.growth_df['ANN_DT'] = pd.to_datetime(self.growth_df['ANN_DT'], errors='coerce')
+        self.growth_df['ANN_DT'] = self.growth_df.groupby('REPORT_PERIOD')['ANN_DT'].transform(
+            lambda x: x.fillna(x.median()))
+    def GROWTH(self):
+        self.growth_df['SGRO'] = np.nan
+        self.growth_df['EGRO'] = np.nan
+        grouped = self.growth_df.groupby('S_INFO_WINDCODE')
+        for stock_code, group in grouped:
+            if len(group) < 5:
+                continue
+            '''if stock_code != '000725.SZ':
+                continue'''
+            self.growth_df.loc[group.index, 'SGRO'] = group['S_FA_GRPS'].rolling(window=5).apply(
+                lambda x: Calculation._regress_w_time(x, 5), raw=False)
+
+            self.growth_df.loc[group.index, 'EGRO'] = group['S_FA_EPS_BASIC'].rolling(window=5).apply(
+                lambda x: Calculation._regress_w_time(x, 5), raw=False)
+
+        self.df = self.df.sort_values(by = 'TRADE_DT')
+        self.growth_df = self.growth_df.sort_values(by = 'ANN_DT')
+
+        self.df = pd.merge_asof(
+            self.df,
+            self.growth_df,
+            by='S_INFO_WINDCODE',
+            left_on='TRADE_DT',
+            right_on='ANN_DT',
+            direction='backward'
+        )
+
+        self.df['GROWTH'] = 0.47 * self.df['SGRO'] + 0.24 * self.df['EGRO']
+
+        return self.df
 
 
 

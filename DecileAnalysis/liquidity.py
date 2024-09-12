@@ -18,6 +18,11 @@ all_mkt_price_df = all_mkt_price_df.sort_values('TRADE_DT')
 liquidity_calculator = liquidity(all_mkt_price_df)
 all_mkt_liquidity = liquidity_calculator.LIQUIDITY()
 
+grouped = all_mkt_liquidity.groupby('S_INFO_WINDCODE')
+for stock_code, group in grouped:
+    data = group[['S_INFO_WINDCODE', 'TRADE_DT', 'LIQUIDITY']]
+    data.to_parquet(f'/Volumes/quanyi4g/factor/day_frequency/barra/Liquidity/{stock_code.replace('.','_')}_liquidity.parquet', index=False)
+
 # 创建杠杆因子分层分析实例
 liquidity_analysis = DecileAnalysis(all_mkt_liquidity, decile_num=5, factor='LIQUIDITY', rebal_freq='w', mv_neutral=False, trade_pool=True)
 df_with_decile = liquidity_analysis.df_with_decile
