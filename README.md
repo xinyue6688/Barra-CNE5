@@ -1,8 +1,8 @@
 # Barra-CNE5 Code Manual 代码使用说明 
 
-## Reference：Barra-CNE5.pdf
+## Barra-CNE5.pdf
 
-- Barra description of style factors in CNE5 model
+- Reference, Barra description of style factors in CNE5 model
 
 ## barra_cne5_factor.py
 - Style Factor Construction 风格因子构建 
