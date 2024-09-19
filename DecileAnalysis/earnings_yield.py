@@ -15,25 +15,7 @@ all_mkt_price_df = all_mkt_price_df[~all_mkt_price_df['S_INFO_WINDCODE'].str.end
 
 
 ey_calculator = EarningsYield(all_mkt_price_df)
-prepared_df = ey_calculator.df
-
-grouped = prepared_df.groupby('S_INFO_WINDCODE')
-no_epibs_list = []
-no_earnings_list = []
-no_cash_list = []
-for stock_code, group in grouped:
-    if group['EPIBS'].isna().all():
-        no_epibs_list.append(stock_code)
-    if group['EARNINGS_TTM'].isna().all():
-        no_earnings_list.append(stock_code)
-    if group['CASH_EARNINGS_TTM'].isna().all():
-        no_cash_list.append(stock_code)
-
-prepared_df['ETOP'] = prepared_df['EARNINGS_TTM'] / prepared_df['S_VAL_MV']
-prepared_df['CETOP'] = prepared_df['CASH_EARNINGS_TTM'] / prepared_df['S_VAL_MV']
-for columns in ['EPIBS', 'ETOP', 'CETOP']:
-    prepared_df[columns] = prepared_df[columns].astype('float64')
-prepared_df['EARNYILD'] = 0.68 * prepared_df['EPIBS'] + 0.11 * prepared_df['ETOP'] + 0.21 * prepared_df['CETOP']
+all_mkt_ey = ey_calculator.EARNYILD()
 #epibs_df = GetData.est_consensus()
 #check_000004 = epibs_df[epibs_df['S_INFO_WINDCODE'] == '000004.SZ']
 

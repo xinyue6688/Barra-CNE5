@@ -18,8 +18,7 @@ all_market_data = all_market_data[~all_market_data['S_INFO_WINDCODE'].str.endswi
 # 创建计算市值因子实例
 bp_calculator = btop()
 all_market_btop_df = bp_calculator.BTOP(all_market_data)
-print(all_market_btop_df.head())
-
+all_market_btop_df['BTOP'] = all_market_btop_df.groupby('S_INFO_WINDCODE')['BTOP'].ffill()
 '''
 grouped = all_market_btop_df.groupby('S_INFO_WINDCODE')
 for stock_code, group in grouped:

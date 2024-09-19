@@ -328,8 +328,9 @@ class Calculation:
         """
         去极值，使因子值在均值的3个标准差范围内
         """
-        mean = x.mean()
-        std = x.std()
+        x = x.replace([np.inf, -np.inf], np.nan)
+        mean = x.dropna().mean()
+        std = x.dropna().std()
         winsorized = x.copy()
         winsorized[x < mean - 3 * std] = mean - 3 * std
         winsorized[x > mean + 3 * std] = mean + 3 * std
@@ -342,20 +343,19 @@ class Calculation:
         """
         if market_value.dtype != np.float64:
             market_value = market_value.astype(np.float64)
-
-        w_mean = np.sum(x * market_value) / np.sum(market_value)
-        std = x.std()
+        x = x.replace([np.inf, -np.inf], np.nan)
+        w_mean = np.sum(x.dropna() * market_value) / np.sum(market_value)
+        std = x.dropna().std()
         standardized = (x - w_mean) / std
         return standardized
 
     def _preprocess(self, data, factor_column):
         if data[f'{factor_column}'].dtype != np.float64:
-            data[f'{factor_column}'] = data[f'{factor_column}'].astype(np.float64)
+            data[f'{factor_column}'] = data[f'{factor_column}'].astype('float')
         data[f'{factor_column}_wsr'] = data.groupby('TRADE_DT')[f'{factor_column}'].transform(lambda x: self._winsorize(x))
         data[f'{factor_column}_pp'] = data.groupby('TRADE_DT').apply(lambda g: self._standardize(g[f'{factor_column}_wsr'], g['S_VAL_MV'])).reset_index(level=0, drop=True)
         data[f'{factor_column}'] = data[f'{factor_column}_pp']
         data.drop(columns=[f'{factor_column}_wsr', f'{factor_column}_pp'], inplace=True)
-
         return data
 
     @staticmethod
@@ -511,7 +511,7 @@ class Size(Calculation):
         df.drop(columns=['SIZE_CUBED', 'LNCAP', 'CONSTANT'], inplace=True)
         return df
 
-class EarningsYield(GetData, Calculation):
+class EarningsYield(GetData):
 
     def __init__(self, df):
         self.prepared_df = self._prepare_data(df)
@@ -531,8 +531,10 @@ class EarningsYield(GetData, Calculation):
 
                 epibs_df = pd.concat([epibs_df, epibs_fy0_df], ignore_index=True)
 
+        epibs_df.sort_values(by='EST_DT', inplace=True)
+        epibs_df['EPIBS'] = epibs_df.groupby('S_INFO_WINDCODE')['EPIBS'].fillna(method='ffill')
         epibs_df['EST_DT'] = pd.to_datetime(epibs_df['EST_DT'])
-        self.df = pd.merge(
+        df = pd.merge(
             df,
             epibs_df,
             left_on = ['S_INFO_WINDCODE', 'TRADE_DT'],
@@ -546,15 +548,32 @@ class EarningsYield(GetData, Calculation):
         earnings_df = earnings_df[(earnings_df['ANN_DT'] - earnings_df['REPORT_PERIOD']) < pd.Timedelta(days=365)]
         earnings_df.reset_index(drop=True, inplace=True)
 
-        self.df = self.df.sort_values(by='TRADE_DT')
-        self.df = pd.merge_asof(
-            self.df,
+        df = df.sort_values(by='TRADE_DT')
+        df = pd.merge_asof(
+            df,
             earnings_df,
             by='S_INFO_WINDCODE',
             left_on='TRADE_DT',
             right_on='ANN_DT',
             direction='backward'
         )
+
+        df['EARNINGS_TTM'] = df.groupby('S_INFO_WINDCODE')['EARNINGS_TTM'].fillna(method='ffill')
+        df['CASH_EARNINGS_TTM'] = df.groupby('S_INFO_WINDCODE')['CASH_EARNINGS_TTM'].fillna(method='ffill')
+
+        return df
+
+    def EARNYILD(self):
+        df = self.prepared_df
+        df['ETOP'] = df['EARNINGS_TTM'] / df['S_VAL_MV']
+        df['CETOP'] = df['CASH_EARNINGS_TTM'] / df['S_VAL_MV']
+        for columns in ['EPIBS', 'ETOP', 'CETOP']:
+             df[columns] = df[columns].astype('float64')
+        df['EARNYILD'] = 0.68 * df['EPIBS'] + 0.11 * df['ETOP'] + 0.21 * df[
+            'CETOP']
+
+        return df
+
 
 
 class ResidualVolatility(Calculation):
@@ -673,7 +692,7 @@ class leverage(GetData, Calculation):
         
         
     def _prep_data(self):
-        # 每个交易日合并到最新披露的长期负债、总负债、和总资产
+        # 每个交易日合并最新披露的长期负债、总负债、和总资产
         self.balance_data['ANN_DT'] = pd.to_datetime(self.balance_data['ANN_DT'])
         self.balance_data = self.balance_data.sort_values('ANN_DT')
         self.df = pd.merge_asof(
@@ -716,10 +735,6 @@ class leverage(GetData, Calculation):
         # 删除不需要的日期标注列
         self.df = self.df.drop(columns=['ANN_DT_x', 'ANN_DT_y', 'CHANGE_DT'])
         self.df['PE'] = self.df['S_FA_BPS'] * self.df['S_SHARE_NTRD_PRFSHARE']
-
-        # 删除需要用到的数据中有空值的列
-        self.df = self.df.dropna(subset=['LD', 'TD', 'TA', 'PE'])
-
         self.df['ME'] = self.df['S_VAL_MV'].copy()
         self.df['BE'] = (self.df['ME'] / self.df['S_DQ_CLOSE']) * self.df['S_FA_BPS']
         self.df.drop(columns=['S_FA_BPS', 'S_SHARE_NTRD_PRFSHARE'], inplace=True)
@@ -749,11 +764,12 @@ class leverage(GetData, Calculation):
         self.BLEV()
         self.df['LEVERAGE'] = 0.38 * self.df['MLEV'] + 0.35 * self.df['DTOA'] + 0.27 * self.df['BLEV']
         self.df = self._preprocess(self.df, 'LEVERAGE')
-
+        self.df['LEVERAGE'] = self.df.groupby('S_INFO_WINDCODE')['LEVERAGE'].ffill()
+        self.df['LEVERAGE'] = self.df.groupby('TRADE_DT')['LEVERAGE'].transform(lambda x: x.fillna(x.mean()))
         return self.df
 
 
-class liquidity(GetData):
+class liquidity(GetData, Calculation):
 
     def __init__(self, df):
         self.turnover_df = GetData.turnover_all()
@@ -762,29 +778,21 @@ class liquidity(GetData):
         self.all_mkt_turnover = self.all_mkt_turnover.sort_values(by='TRADE_DT')
 
     def LIQUIDITY(self):
-        # 按日期升序排列
-        df = self.all_mkt_turnover
-        df['STOM'] = np.nan
-        df['STOQ'] = np.nan
-        df['STOA'] = np.nan
-        df['LIQUIDITY'] = np.nan
-        # 按标的分组
-        grouped = df.groupby('S_INFO_WINDCODE')
+        grouped = self.all_mkt_turnover.groupby('S_INFO_WINDCODE').filter(lambda x: len(x) >= 252)
+        grouped['STOM'] = grouped.groupby('S_INFO_WINDCODE')['S_DQ_TURN'].rolling(window=21).sum().apply(
+            np.log).reset_index(level=0, drop=True)
+        grouped['STOQ'] = grouped.groupby('S_INFO_WINDCODE')['S_DQ_TURN'].rolling(window=63).sum().apply(
+            lambda x: np.log(1 / 3 * x)).reset_index(level=0, drop=True)
+        grouped['STOA'] = grouped.groupby('S_INFO_WINDCODE')['S_DQ_TURN'].rolling(window=252).sum().apply(
+            lambda x: np.log(1 / 12 * x)).reset_index(level=0, drop=True)
 
-        for stock_code, group in grouped:
-            if len(group) >= 21:
-                df.loc[group.index, 'STOM'] = group['S_DQ_TURN'].rolling(window=21).apply(lambda x: np.log(np.sum(x)),
-                                                                                          raw=False)
-            if len(group) >= 63:
-                df.loc[group.index, 'STOQ'] = group['S_DQ_TURN'].rolling(window=63).apply(
-                lambda x: np.log(1/3 * np.sum(x)), raw=False)
+        grouped['LIQUIDITY'] = 0.35 * grouped['STOM'] + 0.35 * grouped['STOQ'] + 0.3 * grouped['STOA']
 
-            if len(group) >= 252:
-                df.loc[group.index, 'STOA'] = group['S_DQ_TURN'].rolling(window=252).apply(
-                    lambda x: np.log(1 / 12 * np.sum(x)), raw=False)
-
-        df['LIQUIDITY'] = 0.35 * df['STOM'] + 0.35 * df['STOQ'] + 0.3 * df['STOA']
-
+        result = grouped.groupby('S_INFO_WINDCODE').apply(lambda x: x.iloc[251:]).reset_index(drop=True)
+        result = result[~result['LIQUIDITY'].isna()]
+        df = self._preprocess(data=result, factor_column='LIQUIDITY')
+        df['LIQUIDITY'] = df.groupby('S_INFO_WINDCODE')['LIQUIDITY'].ffill()
+        df = df[~df['LIQUIDITY'].isna()]
         return df
 
 

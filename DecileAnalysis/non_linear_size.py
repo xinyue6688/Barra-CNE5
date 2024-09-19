@@ -20,6 +20,11 @@ size_calculator = Size()
 all_market_nlsize_df = size_calculator.NLSIZE(all_market_data)
 print(all_market_nlsize_df.head())
 
+'''grouped = all_market_nlsize_df.groupby('S_INFO_WINDCODE')
+for stock_code, group in grouped:
+    data = group[['S_INFO_WINDCODE', 'TRADE_DT', 'NLSIZE']]
+    data.to_parquet(f'/Volumes/quanyi4g/factor/day_frequency/barra/NonlinearSize/{stock_code.replace('.','_')}_nlsize.parquet', index=False)'''
+
 # 创建市值分层分析实例
 nlsize_analysis = DecileAnalysis(all_market_nlsize_df, decile_num=5, factor='NLSIZE', rebal_freq='w', mv_neutral=False, trade_pool=True)
 df_with_decile = nlsize_analysis.df_with_decile

@@ -1,7 +1,7 @@
 # -*- coding = utf-8 -*-
 # @Time: 2024/07/19
 # @Author: Xinyue
-# @File:xxx.py
+# @File:momentum.py
 # @Software: PyCharm
 
 import pandas as pd
@@ -29,6 +29,11 @@ all_market_data = all_market_data[~all_market_data['S_INFO_WINDCODE'].str.endswi
 calculate_mom = Momentum()
 all_market_rstr = calculate_mom.RSTR(all_market_data)
 all_market_rstr = all_market_rstr.dropna(subset = ['RSTR'])
+
+'''grouped = all_market_rstr.groupby('S_INFO_WINDCODE')
+for stock_code, group in grouped:
+    data = group[['S_INFO_WINDCODE', 'TRADE_DT', 'RSTR']]
+    data.to_parquet(f'/Volumes/quanyi4g/factor/day_frequency/barra/Momentum/{stock_code.replace('.','_')}_momentum.parquet', index=False)'''
 
 # 创建市值分层分析实例
 rstr_analysis = DecileAnalysis(all_market_rstr, decile_num=5, factor='RSTR', rebal_freq='w', mv_neutral=False, trade_pool=True)
