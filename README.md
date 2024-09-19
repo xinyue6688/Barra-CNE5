@@ -1,4 +1,4 @@
-# Barra-CNE5 Code Manual 代码使用说明 
+# Code Manual 代码使用说明 
 
 ## Barra-CNE5.pdf
 
