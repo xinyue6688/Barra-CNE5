@@ -1,35 +1,45 @@
-# Code Manual 代码使用说明 
+# Code Manual 代码使用说明
 
-## Barra-CNE5.pdf
+## 1. Barra-CNE5.pdf
+- This document provides a reference for the Barra description of style factors in the CNE5 model.
 
-- Reference, Barra description of style factors in CNE5 model
+## 2. barra_cne5_factor.py
+### Style Factor Construction 风格因子构建
 
-## barra_cne5_factor.py
-- Style Factor Construction 风格因子构建 
+#### 成长因子 (Growth Factor): 
+**GROWTH = 0.47 · SGRO + 0.24 · EGRO + 0.18 · EGIBS + 0.11 · EGIBS_s**
 
-### 1. 杠杆因子 LEVERAGE = 0.38 · MLEV + 0.35 · DTOA + 0.27 · BLEV
+- **SGRO**: 5 years of sales growth[^1] regressed with years = 1, 2, 3, 4, 5
+- **EGRO**: 5 years of earnings per share growth[^2] regressed with years = 1, 2, 3, 4, 5
+- **EGIBS**: NEED DATA
+- **EGIBS_s**: NEED DATA
 
-**MLEV**: The sum of Market Value of Equity(ME), Book Value of Preferred Equity(PE), and Long-term Debt(LD) divided by Market Value of Equity(ME)
+*Constructed using the first two sub-factors due to data limitations, since the weights of the last two sub-factors are relatively smaller.*
 
-- ME: Market value of equity of the last trade day 
-- PE: Most recent book value per share[^1] multiplied by most recent book amount of preferred equity[^2]
-- LD: Most recent book value of long-term debt[^3]
+[^1]: S_FA_GRPS in ASHAREFINANCIALINDICATOR  
+[^2]: S_FA_EPS_BASIC in ASHAREFINANCIALINDICATOR
 
-**DTOA**: Total Debt(TD) divided by Total Asset(TA)
+#### 杠杆因子 (Leverage Factor): 
+**LEVERAGE = 0.38 · MLEV + 0.35 · DTOA + 0.27 · BLEV**
 
-- TD: Most recent book value of total debt[^4]
-- TA: Most recent book value of total asset[^5]
+- **MLEV**: The sum of Market Value of Equity (ME), Book Value of Preferred Equity (PE), and Long-term Debt (LD) divided by Market Value of Equity (ME)
+  - **ME**: Market value of equity of the last trade day
+  - **PE**: Most recent book value per share[^3] multiplied by the most recent book amount of preferred equity[^4]
+  - **LD**: Most recent book value of long-term debt[^5]
 
-**BLEV**: The sum of Book Value of Common Equity(BE), Book Value of Preferred Equity(PE), and Long-term Debt(LD) divided by Book Value of Common Equity(BE)
+- **DTOA**: Total Debt (TD) divided by Total Assets (TA)
+  - **TD**: Most recent book value of total debt[^6]
+  - **TA**: Most recent book value of total assets[^7]
 
-- BE: Market value of equity devided by close price then multiplied by most recent book value per share
+- **BLEV**: The sum of Book Value of Common Equity (BE), Book Value of Preferred Equity (PE), and Long-term Debt (LD) divided by Book Value of Common Equity (BE)
+  - **BE**: Market value of equity divided by close price, then multiplied by the most recent book value per share
 
+[^3]: S_FA_BPS in ASHAREFINANCIALINDICATOR  
+[^4]: S_SHARE_NTRD_PRFSHARE in ASHARECAPITALIZATION  
+[^5]: LT_BORROW in ASHAREBALANCESHEET  
+[^6]: TOT_LIAB in ASHAREBALANCESHEET  
+[^7]: TOT_ASSETS in ASHAREBALANCESHEET
 
-[^1]: S_FA_BPS in ASHAREFINANCIALINDICATOR
-[^2]: S_SHARE_NTRD_PRFSHARE in ASHARECAPITALIZATION
-[^3]: LT_BORROW in ASHAREBALANCESHEET
-[^4]: TOT_LIAB in ASHAREBALANCESHEET
-[^5]: TOT_ASSETS in ASHAREBALANCESHEET
 
 *DecileAnalysis*
 
