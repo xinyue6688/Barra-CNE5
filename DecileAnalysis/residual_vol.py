@@ -21,11 +21,13 @@ all_mkt_resvol = calculate_resvol.RESVOL(all_mkt_price_df)
 grouped = all_mkt_resvol.groupby('S_INFO_WINDCODE')
 for stock_code, group in grouped:
     data = group[['S_INFO_WINDCODE', 'TRADE_DT', 'RESVOL']]
-    data.to_parquet(f'/Volumes/quanyi4g/factor/day_frequency/barra/ResidualVolatility/{stock_code.replace('.','_')}_resvol', index=False)
-# 创建分层分析实例
+    data.to_parquet(f'/Volumes/quanyi4g/factor/day_frequency/barra/ResidualVolatility/{stock_code.replace('.','_')}_resvol.parquet', index=False)
+
+
+'''# 创建分层分析实例
 resvol_analysis = DecileAnalysis(all_mkt_resvol, decile_num=5, factor='RESVOL', rebal_freq='w', mv_neutral=False, trade_pool=True)
 df_with_decile = resvol_analysis.df_with_decile
 resvol_analysis.plot_decile_returns()
 resvol_analysis.plot_long_short_NAV()
 resvol_analysis.print_long_short_metrics()
-resvol_analysis.print_icir_bystock()
+resvol_analysis.print_icir_bystock()'''

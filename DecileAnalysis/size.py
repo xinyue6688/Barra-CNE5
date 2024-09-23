@@ -28,8 +28,12 @@ all_market_data = all_market_data[~all_market_data['S_INFO_WINDCODE'].str.endswi
 # 创建计算市值因子实例
 size_calculator = Size()
 all_market_lncap_df = size_calculator.LNCAP(all_market_data)
-print(all_market_lncap_df.head())
+grouped = all_market_lncap_df.groupby('S_INFO_WINDCODE')
+for stock_code, group in grouped:
+    data = group[['S_INFO_WINDCODE', 'TRADE_DT', 'LNCAP']]
+    data.to_parquet(f'/Volumes/quanyi4g/factor/day_frequency/barra/Size/{stock_code.replace('.','_')}_lncap.parquet', index=False)
 
+'''
 # 创建市值分层分析实例
 lncap_analysis = DecileAnalysis(all_market_lncap_df, decile_num=5, factor='LNCAP', rebal_freq='w', mv_neutral=False, trade_pool=True)
 df_with_decile = lncap_analysis.df_with_decile
@@ -37,7 +41,7 @@ lncap_analysis.plot_decile_returns()
 lncap_analysis.plot_long_short_NAV()
 lncap_analysis.print_long_short_metrics()
 lncap_analysis.print_icir_bystock()
-
+'''
 
 
 

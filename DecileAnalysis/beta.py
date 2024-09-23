@@ -8,7 +8,7 @@
 import pandas as pd
 
 
-from barra_cne5_factor import Beta, ResidualVolatility
+from barra_cne5_factor import Beta
 
 # 全市场去除北交所
 all_mkt_price_df = pd.read_parquet('../Data/all_market_data.parquet')

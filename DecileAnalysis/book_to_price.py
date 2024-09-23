@@ -18,18 +18,17 @@ all_market_data = all_market_data[~all_market_data['S_INFO_WINDCODE'].str.endswi
 # 创建计算市值因子实例
 bp_calculator = btop()
 all_market_btop_df = bp_calculator.BTOP(all_market_data)
-all_market_btop_df['BTOP'] = all_market_btop_df.groupby('S_INFO_WINDCODE')['BTOP'].ffill()
-'''
+
 grouped = all_market_btop_df.groupby('S_INFO_WINDCODE')
 for stock_code, group in grouped:
     data = group[['S_INFO_WINDCODE', 'TRADE_DT', 'BTOP']]
-    data.to_parquet(f'/Volumes/quanyi4g/factor/day_frequency/barra/Btop/{stock_code.replace('.','_')}_btop', index=False)
-'''
+    data.to_parquet(f'/Volumes/quanyi4g/factor/day_frequency/barra/Btop/{stock_code.replace('.','_')}_btop.parquet', index=False)
 
-# 创建市值分层分析实例
+
+'''# 创建市值分层分析实例
 bp_analysis = DecileAnalysis(all_market_btop_df, decile_num=5, factor='BTOP', rebal_freq='w', mv_neutral=False, trade_pool=True)
 df_with_decile = bp_analysis.df_with_decile
 bp_analysis.plot_decile_returns()
 bp_analysis.plot_long_short_NAV()
 bp_analysis.print_long_short_metrics()
-bp_analysis.print_icir_bystock()
+bp_analysis.print_icir_bystock()'''
