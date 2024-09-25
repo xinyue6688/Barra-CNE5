@@ -26,6 +26,9 @@ ind_df.sort_values(by = 'TRADE_DT', inplace = True)
 ind_df.reset_index(drop=True, inplace=True)
 
 # 添加T+1收益列
+ind_df['S_DQ_CLOSE'] = ind_df['S_DQ_CLOSE'].astype('float')
+ind_df['S_DQ_PRECLOSE'] = ind_df['S_DQ_PRECLOSE'].astype('float')
+ind_df['STOCK_RETURN'] = np.log(ind_df['S_DQ_CLOSE'] / ind_df['S_DQ_PRECLOSE'])
 ind_df['RETURN_T1'] = ind_df.groupby('S_INFO_WINDCODE')['STOCK_RETURN'].shift(-1).reset_index(drop=True)
 ind_df.dropna(subset = 'RETURN_T1', inplace = True)
 
@@ -86,8 +89,9 @@ for factor in factors:
     }
 
     merged_df = merged_df[merged_df[new_column].notna()]
-    merged_df.to_parquet('Data/style_factors_updated.parquet', index = False)
     print(f'Factor: {factor} merged')
+
+merged_df.to_parquet('Data/style_factors_updated.parquet', index = False)
 
 # 打印统计结果
 for factor, stats in coverage_stats.items():
