@@ -94,44 +94,10 @@ for factor in factors:
 merged_df.to_parquet('Data/style_factors_updated.parquet', index = False)
 
 # 打印统计结果
+print("风格因子有值率统计：")
 for factor, stats in coverage_stats.items():
     print(f"Factor: {factor}")
     print(f"Pre-ffill non-null rate: {stats['original_non_null']:.4f}")
     print(f"Post-ffill non-null rate: {stats['post_ffill']:.4f}")
     print(f"Post-fillna non-null rate: {stats['post_cs_mean_fill']:.4f}\n")
 
-
-'''from linearmodels.panel.model import FamaMacBeth
-merged_df['TRADE_DT'] = pd.to_datetime(merged_df['TRADE_DT'])
-
-merged_df.set_index(['S_INFO_WINDCODE', 'TRADE_DT'], inplace=True)
-
-# Assuming RETURN_T1 is the dependent variable and the other columns are independent variables
-y = merged_df['RETURN_T1']
-X = merged_df[['Communication Services', 'Consumer Discretionary',
-               'Consumer Staples', 'Energy', 'Financials',
-               'Health Care', 'Industrials', 'Information Technology',
-               'Materials', 'Real Estate', 'Utilities', 'COUNTRY',
-               'RSTR', 'LNCAP', 'EARNYILD', 'GROWTH', 'LEVERAGE',
-               'LIQUIDITY', 'RESVOL', 'BTOP', 'NLSIZE', 'BETA']]
-
-# Create a copy of X to ensure the original DataFrame is not affected
-X_clean = X.copy()
-X_clean = X_clean.drop(columns=['Utilities'])
-
-# Step 3: Ensure y aligns with the cleaned X
-y_clean = y.loc[X_clean.index]
-model = FamaMacBeth(y_clean, X_clean)
-result = model.fit()
-
-# Factor returns (coefficients)
-factor_returns = result.params
-print(factor_returns)
-
-result = model.fit()
-print(result.summary)
-
-
-
-
-'''
