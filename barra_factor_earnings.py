@@ -1,7 +1,7 @@
 # -*- coding = utf-8 -*-
 # @Time: 2024/09/20
 # @Author: Xinyue
-# @File:barra_factor_earnings(pt1).py
+# @File:barra_factor_earnings.py
 # @Software: PyCharm
 
 import os
