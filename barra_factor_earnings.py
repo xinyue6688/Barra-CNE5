@@ -12,29 +12,30 @@ import statsmodels.api as sm
 from scipy.optimize import minimize
 from linearmodels.panel import PanelOLS
 from scipy import stats
+from datetime import datetime
 
 """更新后不需要从各个标的分别读数 以下是保留的代码"""
 """从各个标的暴露文件夹读数"""
 '''# 添加行业因子，获取行业数据
-ind_df = pd.read_parquet('Data/alpha_beta_all_market.parquet')
+factor_df = pd.read_parquet('Data/alpha_beta_all_market.parquet')
 # 去除北交所标的
-ind_df = ind_df[~ind_df['S_INFO_WINDCODE'].str.endswith('BJ')]
+factor_df = factor_df[~factor_df['S_INFO_WINDCODE'].str.endswith('BJ')]
 
 # 按日期升序排列，重设索引
-ind_df.sort_values(by = 'TRADE_DT', inplace = True)
-ind_df.reset_index(drop=True, inplace=True)
+factor_df.sort_values(by = 'TRADE_DT', inplace = True)
+factor_df.reset_index(drop=True, inplace=True)
 
 # 添加T+1收益列
-ind_df['S_DQ_CLOSE'] = ind_df['S_DQ_CLOSE'].astype('float')
-ind_df['S_DQ_PRECLOSE'] = ind_df['S_DQ_PRECLOSE'].astype('float')
-ind_df['STOCK_RETURN'] = np.log(ind_df['S_DQ_CLOSE'] / ind_df['S_DQ_PRECLOSE'])
-ind_df['RETURN_T1'] = ind_df.groupby('S_INFO_WINDCODE')['STOCK_RETURN'].shift(-1).reset_index(drop=True)
-ind_df.dropna(subset = 'RETURN_T1', inplace = True)
+factor_df['S_DQ_CLOSE'] = factor_df['S_DQ_CLOSE'].astype('float')
+factor_df['S_DQ_PRECLOSE'] = factor_df['S_DQ_PRECLOSE'].astype('float')
+factor_df['STOCK_RETURN'] = np.log(factor_df['S_DQ_CLOSE'] / factor_df['S_DQ_PRECLOSE'])
+factor_df['RETURN_T1'] = factor_df.groupby('S_INFO_WINDCODE')['STOCK_RETURN'].shift(-1).reset_index(drop=True)
+factor_df.dropna(subset = 'RETURN_T1', inplace = True)
 
 # 添加国家因子，每个标的对国家因子的暴露恒为1
-ind_df['COUNTRY'] = 1
+factor_df['COUNTRY'] = 1
 # 保留BETA因子不为空的列
-ind_df.dropna(subset = 'BETA', inplace = True)
+factor_df.dropna(subset = 'BETA', inplace = True)
 
 # 定义目标路径
 folder_path = '/Volumes/quanyi4g/factor/day_frequency/barra'
@@ -46,7 +47,7 @@ factors.remove('Beta')
 coverage_stats = {}
 
 # 初始化 factor_df，用于存储合并后的数据
-factor_df = ind_df.copy()
+factor_df = factor_df.copy()
 
 # 遍历每个因子文件夹并读取数据
 for factor in factors:
@@ -99,7 +100,23 @@ for factor, stats in coverage_stats.items():
     print(f"Post-fillna non-null rate: {stats['post_cs_mean_fill']:.4f}\n")
 '''
 
+"""更新因子收益"""
+factor_returns_by_day = pd.read_parquet('/Volumes/quanyi4g/factor/day_frequency/barra/factor_return.parquet')
+last_updated_date = factor_returns_by_day['TRADE_DT'].unique().max()
+todays_date = datetime.now()
+
+# 获取因子暴露中需要更新的部分
+factor_df_new = pd.read_parquet('/Volumes/quanyi4g/factor/day_frequency/barra/factor_exposure(updated).parquet')
+factor_df = factor_df_new[(factor_df_new['TRADE_DT'] > last_updated_date) &
+        (factor_df_new['TRADE_DT'] <= pd.to_datetime(todays_date, format='%Y%m%d'))
+]
 factor_df.dropna(subset = 'S_VAL_MV', inplace = True)
+
+# 计算t+1期的对数收益
+factor_df['S_DQ_CLOSE'] = factor_df['S_DQ_CLOSE'].astype('float')
+factor_df['S_DQ_PRECLOSE'] = factor_df['S_DQ_PRECLOSE'].astype('float')
+factor_df['STOCK_RETURN'] = np.log(factor_df['S_DQ_CLOSE'] / factor_df['S_DQ_PRECLOSE'])
+factor_df['RETURN_T1'] = factor_df.groupby('S_INFO_WINDCODE')['STOCK_RETURN'].shift(-1).reset_index(drop=True)
 
 # 定义不包括 'WIND_PRI_IND' 的因子列
 factor_columns = ['COUNTRY', 'BETA', 'RSTR', 'LNCAP', 'EARNYILD', 'GROWTH',
@@ -108,9 +125,6 @@ factor_columns = ['COUNTRY', 'BETA', 'RSTR', 'LNCAP', 'EARNYILD', 'GROWTH',
 # 将 'WIND_PRI_IND' 转换为虚拟变量
 factor_df_with_dummies = pd.get_dummies(factor_df, columns=['WIND_PRI_IND'],
                                      drop_first=True, dtype = float)
-
-# 全市场标的因子暴露落到数据库
-factor_df.drop(columns=['STOCK_RETURN', 'MKT_RETURN', 'RETURN_T1']).to_parquet('/Volumes/quanyi4g/factor/day_frequency/barra/factor_exposure.parquet', index = False)
 
 industry_columns = [col for col in factor_df_with_dummies if col.startswith('WIND_PRI_IND_')]
 
@@ -167,8 +181,13 @@ def weighted_ols_with_constraint(df_with_dummies, max_tries=10000000):
     return pd.Series([None] * len(beta_init), index=factor_columns + industry_columns)
 
 # 按 'TRADE_DT' 分组，并对每一天应用回归
-factor_returns_by_day = factor_df_with_dummies.groupby('TRADE_DT').apply(weighted_ols_with_constraint, include_groups=False)
-factor_returns_by_day = factor_returns_by_day.reset_index()
+factor_returns_by_day_new = factor_df_with_dummies.groupby('TRADE_DT').apply(weighted_ols_with_constraint, include_groups=False)
+factor_returns_by_day_new = factor_returns_by_day_new.reset_index()
+
+# 更新 新增的因子收益
+factor_returns_by_day_updated = pd.concat([factor_returns_by_day, factor_returns_by_day_new], axis=0, ignore_index=True)
+# 写到数据库
+factor_returns_by_day_updated.to_parquet('/Volumes/quanyi4g/factor/day_frequency/barra/factor_return(updated).parquet')
 
 '''# 查看缺失值，获取包涵缺失值的日期
 #missing_dates = factor_returns_by_day.loc[factor_returns_by_day.isna().any(axis=1), 'TRADE_DT']
@@ -180,9 +199,6 @@ factor_returns_by_day = factor_returns_by_day.reset_index()
 #    factor_returns_by_day.loc[factor_returns_by_day['TRADE_DT'] == trade_date, new_factor_returns.index] = new_factor_returns.values
 
 #print(factor_returns_by_day.columns)'''
-
-# 写到数据库
-factor_returns_by_day.to_parquet('/Volumes/quanyi4g/factor/day_frequency/barra/factor_return.parquet')
 
 """回归参数显著性检验"""
 
@@ -196,7 +212,7 @@ p_values = []
 
 # 遍历每个因子列
 for factor in factor_columns:
-    factor_data = factor_returns_by_day[factor].dropna()  # 去掉 NaN 值
+    factor_data = factor_returns_by_day_updated[factor].dropna()  # 去掉 NaN 值
 
     # 计算期望收益和标准差
     mean_return = factor_data.mean()  # 计算均值
@@ -251,7 +267,7 @@ def calculate_residuals(factor_df, factor_returns):
 
 
 # 计算所有交易日的残差
-residuals_dict = calculate_residuals(factor_df_with_dummies, factor_returns_by_day)
+residuals_dict = calculate_residuals(factor_df_with_dummies, factor_returns_by_day_updated)
 
 
 # 计算残差的 t 值和 p 值
