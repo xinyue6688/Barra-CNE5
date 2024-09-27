@@ -55,7 +55,8 @@ class DataProcess(WindData):
         member_prices.drop(columns=['S_CON_INDATE', 'S_CON_OUTDATE', 'CUR_SIGN'], inplace=True)
         return member_prices
 
-    def assign_industry(self, stock_list):
+    @staticmethod
+    def assign_industry(stock_list):
         """
         分配行业信息
         :param stock_list: 股票数据表 格式：TRADE_DT(datetime64[ns]), S_INFO_WINDCODE(str)

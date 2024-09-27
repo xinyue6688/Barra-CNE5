@@ -13,7 +13,9 @@ from scipy.optimize import minimize
 from linearmodels.panel import PanelOLS
 from scipy import stats
 
-# 添加行业因子，获取行业数据
+"""更新后不需要从各个标的分别读数 以下是保留的代码"""
+"""从各个标的暴露文件夹读数"""
+'''# 添加行业因子，获取行业数据
 ind_df = pd.read_parquet('Data/alpha_beta_all_market.parquet')
 # 去除北交所标的
 ind_df = ind_df[~ind_df['S_INFO_WINDCODE'].str.endswith('BJ')]
@@ -95,9 +97,7 @@ for factor, stats in coverage_stats.items():
     print(f"Pre-ffill non-null rate: {stats['original_non_null']:.4f}")
     print(f"Post-ffill non-null rate: {stats['post_ffill']:.4f}")
     print(f"Post-fillna non-null rate: {stats['post_cs_mean_fill']:.4f}\n")
-
-# 全市场标的因子暴露落到数据库
-factor_df.to_parquet('/Volumes/quanyi4g/factor/day_frequency/barra/factor_exposure.parquet', index = False)
+'''
 
 factor_df.dropna(subset = 'S_VAL_MV', inplace = True)
 
@@ -108,6 +108,10 @@ factor_columns = ['COUNTRY', 'BETA', 'RSTR', 'LNCAP', 'EARNYILD', 'GROWTH',
 # 将 'WIND_PRI_IND' 转换为虚拟变量
 factor_df_with_dummies = pd.get_dummies(factor_df, columns=['WIND_PRI_IND'],
                                      drop_first=True, dtype = float)
+
+# 全市场标的因子暴露落到数据库
+factor_df.drop(columns=['STOCK_RETURN', 'MKT_RETURN', 'RETURN_T1']).to_parquet('/Volumes/quanyi4g/factor/day_frequency/barra/factor_exposure.parquet', index = False)
+
 industry_columns = [col for col in factor_df_with_dummies if col.startswith('WIND_PRI_IND_')]
 
 # 定义目标函数：加权最小二乘

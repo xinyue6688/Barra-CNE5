@@ -13,26 +13,7 @@ import statsmodels.api as sm
 from scipy.stats import zscore
 
 from Utils.connect_wind import ConnectDatabase
-
-cn_trade_calender = mcal.get_calendar('XSHG')
-trade_day = cn_trade_calender.schedule(pd.Timestamp('2007-06-01'), pd.Timestamp('2010-01-01'))
-
-START_DATE = trade_day.index[-525].strftime('%Y%m%d')
-END_DATE = datetime.now().strftime('%Y%m%d')
-
-
-class lazyproperty:
-    def __init__(self, func):
-        self.func = func
-        self.name = func.__name__
-
-    def __get__(self, instance, owner):
-        if instance is None:
-            return self
-        value = self.func(instance)
-        setattr(instance, self.name, value)  # Cache the computed value
-        return value
-
+from Utils.data_clean import DataProcess
 
 class GetData(ConnectDatabase):
 
@@ -68,6 +49,7 @@ class GetData(ConnectDatabase):
         yield10yr_df['RF_RETURN'] = (1 + yield10yr_df['RF_RETURN_ANN']) ** (1 / 252) - 1
 
         rf = yield10yr_df[['TRADE_DT', 'RF_RETURN']]
+
         return rf
 
     @staticmethod
@@ -438,7 +420,7 @@ class Beta(Calculation):
                     - 'S_DQ_CLOSE': 收盘价 例: 10.5
                     - 'S_DQ_PRECLOSE': 前一日收盘价 例: 10.0
         """
-        self.rf_df = pd.read_parquet('/Volumes/quanyi4g/factor/day_frequency/fundamental/RiskFree/risk_free.parquet')
+        self.rf_df = GetData.risk_free()
         self.csi_df = GetData.mkt_index('000985.CSI')
         self.csi_df['TRADE_DT'] = pd.to_datetime(self.csi_df['TRADE_DT'])
         self.csi_df['MKT_RETURN'] = self.csi_df['S_DQ_CLOSE'] / self.csi_df['S_DQ_PRECLOSE'] - 1
@@ -1149,4 +1131,115 @@ class liquidity(GetData, Calculation):
         df = df[~df['LIQUIDITY'].isna()]
 
         return df
+
+
+
+if __name__ == '__main__':
+    factor_exposure = pd.read_parquet('/Volumes/quanyi4g/factor/day_frequency/barra/factor_exposure.parquet')
+
+    last_updated_date = factor_exposure['TRADE_DT'].unique().max()
+    todays_date = datetime.now().strftime('%Y%m%d')
+
+    cn_trade_calender = mcal.get_calendar('XSHG')
+    trade_day = cn_trade_calender.schedule(pd.Timestamp('2007-06-01'), todays_date)
+
+    START_DATE = trade_day.index[-525].strftime('%Y%m%d')
+    END_DATE = todays_date
+
+    # 获取最新的价格
+    all_market_new_price = GetData.all_price()
+    # 获取最新的市值
+    all_market_new_mv = GetData.all_mv()
+    # 合并到一个数据框
+    all_market_new_data = pd.merge(all_market_new_price, all_market_new_mv, on = ['TRADE_DT', 'S_INFO_WINDCODE'],\
+                                   how = 'left')
+    # 去除北交所
+    all_market_new_data = all_market_new_data[~all_market_new_data['S_INFO_WINDCODE'].str.endswith('BJ')]
+    # 分配行业
+    all_market_new_data = DataProcess.assign_industry(all_market_new_data)
+
+    # 更新BETA
+    calculate_beta = Beta(all_market_new_data)
+    beta_df = calculate_beta.beta_df
+
+    # 更新BTOP
+    bp_calculator = btop()
+    btop_df = bp_calculator.BTOP(all_market_new_data)
+
+    # 合并beta和btop
+    new_factor_exposure = pd.merge(beta_df, btop_df[['S_INFO_WINDCODE', 'TRADE_DT', 'BTOP']], on = ['S_INFO_WINDCODE', 'TRADE_DT'], how = 'left')
+    # 添加国家因子（常数项）
+    new_factor_exposure['COUNTRY'] = 1
+
+    # 更新残差波动率RESVOL
+    calculate_resvol = ResidualVolatility()
+    resvol_df = calculate_resvol.RESVOL(new_factor_exposure)
+    new_factor_exposure = pd.merge(new_factor_exposure, resvol_df[['S_INFO_WINDCODE', 'TRADE_DT','RESVOL']], on=['S_INFO_WINDCODE', 'TRADE_DT'], how='left')
+
+    # 更新动量RSTR
+    calculate_mom = Momentum()
+    rstr_df = calculate_mom.RSTR(all_market_new_data)
+    # 合并到新因子暴露数据框
+    new_factor_exposure = pd.merge(new_factor_exposure, rstr_df[['S_INFO_WINDCODE', 'TRADE_DT','RSTR']], on=['S_INFO_WINDCODE', 'TRADE_DT'], how = 'left')
+
+    # 更新市值LNCAP
+    size_calculator = Size()
+    lncap_df = size_calculator.LNCAP(all_market_new_data)
+    # 合并到新因子暴露数据框
+    new_factor_exposure = pd.merge(new_factor_exposure, lncap_df[['S_INFO_WINDCODE', 'TRADE_DT','LNCAP']], on=['S_INFO_WINDCODE', 'TRADE_DT'], how = 'left')
+
+    # 更新收益因子EARNYILD
+    ey_calculator = EarningsYield(all_market_new_data)
+    ey_df = ey_calculator.EARNYILD()
+    # 合并到新因子暴露数据框
+    new_factor_exposure = pd.merge(new_factor_exposure, ey_df[['S_INFO_WINDCODE', 'TRADE_DT','EARNYILD']], on=['S_INFO_WINDCODE', 'TRADE_DT'], how = 'left')
+
+    # 更新成长因子GROWTH
+    growth_calculator = growth(all_market_new_data)
+    growth_df = growth_calculator.GROWTH()
+    # 合并到新因子暴露数据框
+    new_factor_exposure = pd.merge(new_factor_exposure, growth_df[['S_INFO_WINDCODE', 'TRADE_DT','GROWTH']], on=['S_INFO_WINDCODE', 'TRADE_DT'], how = 'left')
+
+    # 更新杠杆因子LEVERAGE
+    leverage_calculator = leverage(all_market_new_data)
+    leverage_df = leverage_calculator.LEVERAGE()
+    # 合并到新因子暴露数据框
+    new_factor_exposure = pd.merge(new_factor_exposure, leverage_df[['S_INFO_WINDCODE', 'TRADE_DT','LEVERAGE']], on=['S_INFO_WINDCODE', 'TRADE_DT'], how='left')
+
+    # 更新流动性LIQUIDITY
+    liquidity_calculator = liquidity(all_market_new_data)
+    liquidity_df = liquidity_calculator.LIQUIDITY()
+    new_factor_exposure = pd.merge(new_factor_exposure, liquidity_df[['S_INFO_WINDCODE', 'TRADE_DT','LIQUIDITY']], on=['S_INFO_WINDCODE', 'TRADE_DT'], how='left')
+
+    # 更新非线性市值NLSIZE
+    size_calculator = Size()
+    nlsize_df = size_calculator.NLSIZE(all_market_new_data)
+    new_factor_exposure = pd.merge(new_factor_exposure, nlsize_df[['S_INFO_WINDCODE', 'TRADE_DT','NLSIZE']], on=['S_INFO_WINDCODE', 'TRADE_DT'], how='left')
+
+    # 保留需要更新的数据
+    new_factor_exposure = new_factor_exposure[
+        (new_factor_exposure['TRADE_DT'] > last_updated_date) &
+        (new_factor_exposure['TRADE_DT'] <= pd.to_datetime(todays_date, format='%Y%m%d'))
+        ]
+
+    # 对齐原数据框的顺序
+    new_factor_exposure = new_factor_exposure[['S_INFO_WINDCODE', 'TRADE_DT', 'S_DQ_PRECLOSE', 'S_DQ_CLOSE',
+       'S_VAL_MV', 'WIND_PRI_IND', 'RF_RETURN', 'ALPHA', 'BETA', 'SIGMA',
+       'COUNTRY', 'RSTR', 'LNCAP', 'EARNYILD', 'GROWTH', 'LEVERAGE',
+       'LIQUIDITY', 'RESVOL', 'BTOP', 'NLSIZE']]
+
+    # 更新因子暴露并存储到数据库
+    factor_exposure_updated = pd.concat([factor_exposure, new_factor_exposure], axis=0, ignore_index=True)
+    factor_exposure_updated.to_parquet('/Volumes/quanyi4g/factor/day_frequency/barra/factor_exposure(updated).parquet')
+
+
+
+
+
+
+
+
+
+
+
 

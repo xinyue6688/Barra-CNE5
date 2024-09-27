@@ -1,7 +1,7 @@
 # -*- coding = utf-8 -*-
 # @Time: 2024/07/19
 # @Author: Xinyue
-# @File:xxx.py
+# @File: decile_analysis.py
 # @Software: PyCharm
 
 from scipy.stats import zscore
@@ -30,12 +30,13 @@ class lazyproperty:
 
 class DecileAnalysis:
 
-    def __init__(self, df, decile_num, factor, rebal_freq, mv_neutral= False, trade_pool = True):
+    def __init__(self, df, decile_num, factor, rebal_freq, mv_neutral= False, trade_pool = True, positive_return = True):
         self.factor = factor
         self.clean_df = self._clean_data(df)
         self.decile_num = decile_num
         self.rebal_freq = rebal_freq
         self.mv_neutral = mv_neutral
+        self.positive_return = positive_return
         self.df_with_decile = self.industry_neutral_decile(trade_pool)
         self.factor_decile_rt_df = self.calculate_decile_returns()
         self.long_short_df = self.long_short_NAV()
@@ -169,6 +170,7 @@ class DecileAnalysis:
                     continue
                 else:
                     self._assign_decile(group, date, industry, df)
+            df = df.dropna(subset=['DECILE'])
 
         # 周频调仓
         elif self.rebal_freq == 'w':
@@ -278,7 +280,7 @@ class DecileAnalysis:
                                                   values=['STOCK_RETURN', f'{self.factor}_LAG1'])
         long_short_df.dropna(inplace=True)
         long_short_df[f'long_short_{self.factor}'] = long_short_df[f'{self.factor}_LAG1', 5] - long_short_df[f'{self.factor}_LAG1', 1]
-        if (1 + long_short_df['STOCK_RETURN', 1]).cumprod().iloc[-1] > (1 + long_short_df['STOCK_RETURN', 5]).cumprod().iloc[-1]:
+        if self.positive_return & ((1 + long_short_df['STOCK_RETURN', 1]).cumprod().iloc[-1] > (1 + long_short_df['STOCK_RETURN', 5]).cumprod().iloc[-1]):
             long_short_df['long_short_diff'] = long_short_df['STOCK_RETURN', 1] - long_short_df['STOCK_RETURN', 5]
         else:
             long_short_df['long_short_diff'] = long_short_df['STOCK_RETURN', 5] - long_short_df['STOCK_RETURN', 1]
