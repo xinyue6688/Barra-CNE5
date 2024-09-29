@@ -120,7 +120,8 @@ class PortfolioRiskAttribution:
 
 
 if __name__ == '__main__':
-    # Load factor returns from a Parquet file
+
+    '''如更新，需要使用更新后的路径'/Volumes/quanyi4g/factor/day_frequency/barra/factor_return(updated).parquet'''
     factor_returns_by_day = pd.read_parquet('/Volumes/quanyi4g/factor/day_frequency/barra/factor_return.parquet')
 
     # Fetch the custom portfolio DataFrame for the index code '000852.SH'
