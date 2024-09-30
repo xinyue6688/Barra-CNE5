@@ -135,3 +135,8 @@ The implementation includes functions to:
 ## long_short_factor_earnings.py
 - Fix the factor exposure at 1 and calculate long-short factor earnings for each style factor
 - Long decile 5 w/ the largest factor exposure, and short decile 1 w/ lowest, may lead to negative returns to align with the regression earnings for easier comparing
+
+## Contact Info
+Discussions are welcomed! Please find me via the following contact info if there is any questions or comments:
+- LinkedIn: https://www.linkedin.com/in/xinyue-zhang-ucla2024
+- Wechat: hichloe00
