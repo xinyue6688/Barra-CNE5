@@ -138,5 +138,5 @@ The implementation includes functions to:
 
 ## Contact Info
 Discussions are welcomed! Please find me via the following contact info if there is any questions or comments:
-- LinkedIn: https://www.linkedin.com/in/xinyue-zhang-ucla2024
+- LinkedIn: https://www.linkedin.com/in/xinyue6688
 - Wechat: hichloe00
